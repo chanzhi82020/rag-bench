@@ -1,0 +1,18 @@
+{
+  "name": "xquad_zh",
+  "version": "1.0",
+  "description": "XQuAD dataset (zh language) converted to Golden Dataset format",
+  "source": "https://github.com/google-deepmind/xquad",
+  "size": 1190,
+  "domain": "question_answering",
+  "language": "zh",
+  "created_at": null,
+  "license": "Apache 2.0",
+  "tags": [
+    "xquad",
+    "question_answering",
+    "multi_answer",
+    "zh"
+  ],
+  "statistics": {}
+}

@@ -1,0 +1,42 @@
+{
+  "name": "test_evaluation",
+  "dataset_size": 5,
+  "timestamp": "2025-11-20T08:34:53.700620",
+  "metadata": {
+    "test": "metadata"
+  },
+  "metrics": {
+    "faithfulness": {
+      "name": "faithfulness",
+      "score": 0.85,
+      "count": 5,
+      "min_score": 0.75,
+      "max_score": 0.9,
+      "std_score": 0.05916079783099615,
+      "scores": [
+        0.9,
+        0.8,
+        0.85,
+        0.9,
+        0.75
+      ],
+      "metadata": null
+    },
+    "answer_relevancy": {
+      "name": "answer_relevancy",
+      "score": 0.78,
+      "count": 5,
+      "min_score": 0.75,
+      "max_score": 0.8,
+      "std_score": 0.024494897427831803,
+      "scores": [
+        0.8,
+        0.75,
+        0.8,
+        0.75,
+        0.8
+      ],
+      "metadata": null
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{"reference_context": "密码重置功能位于登录页面，点击'忘记密码'链接可以启动密码重置流程。", "reference_context_id": "reset_001", "title": "密码重置指南"}
+{"reference_context": "系统会向用户注册的邮箱发送密码重置链接，用户需要在24小时内完成重置。", "reference_context_id": "reset_002", "title": "密码重置说明"}
+{"reference_context": "退款处理时间为1-2个工作日，银行到账时间为1-3个工作日。", "reference_context_id": "refund_001", "title": "退款政策"}
+{"reference_context": "用户可以通过订单详情页面查看退款进度。", "reference_context_id": "refund_002", "title": "退款查询"}
+{"reference_context": "在线客服可通过网站右下角的聊天窗口访问，响应时间通常为2-5分钟。", "reference_context_id": "contact_001", "title": "在线客服"}
+{"reference_context": "客服电话支持时间为工作日9:00-18:00，周末及节假日休息。", "reference_context_id": "contact_002", "title": "客服电话"}

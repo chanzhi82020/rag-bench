@@ -1,0 +1,18 @@
+{
+  "name": "hotpotqa_distractor",
+  "version": "1.0",
+  "description": "HotpotQA distractor dataset converted to Golden Dataset format",
+  "source": "https://hotpotqa.github.io/",
+  "size": 7405,
+  "domain": "general_knowledge",
+  "language": "en",
+  "created_at": null,
+  "license": "MIT",
+  "tags": [
+    "multi-hop",
+    "question_answering",
+    "reasoning",
+    "distractor"
+  ],
+  "statistics": {}
+}

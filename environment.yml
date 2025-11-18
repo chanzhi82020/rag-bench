@@ -1,0 +1,9 @@
+name: rag-bench
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    - uv
