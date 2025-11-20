@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Union
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, field_validator
 import json
 
 
@@ -26,14 +26,14 @@ class GoldenRecordModel(BaseModel):
     """Pydantic model for Golden Record validation"""
     user_input: str = Field(..., min_length=1, description="User question or query")
     reference: str = Field(..., min_length=1, description="Reference answer")
-    reference_contexts: List[str] = Field(..., min_items=1, description="List of relevant context passages")
+    reference_contexts: List[str] = Field(..., min_length=1, description="List of relevant context passages")
     reference_context_ids: Optional[List[str]] = Field(
         default=None, 
         description="Optional list of context IDs"
     )
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     
-    @validator('user_input')
+    @field_validator('user_input')
     def validate_user_input(cls, v):
         if not v.strip():
             raise ValueError('user_input cannot be empty')
@@ -41,7 +41,7 @@ class GoldenRecordModel(BaseModel):
             raise ValueError('user_input too long (max 5000 characters)')
         return v
     
-    @validator('reference')
+    @field_validator('reference')
     def validate_reference(cls, v):
         if not v.strip():
             raise ValueError('reference cannot be empty')
@@ -49,7 +49,7 @@ class GoldenRecordModel(BaseModel):
             raise ValueError('reference too long (max 10000 characters)')
         return v
     
-    @validator('reference_contexts')
+    @field_validator('reference_contexts')
     def validate_reference_contexts(cls, v):
         if not v:
             raise ValueError('reference_contexts cannot be empty')
@@ -78,7 +78,7 @@ class CorpusRecordModel(BaseModel):
     title: str = Field(..., min_length=1, description="Document title")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     
-    @validator('reference_context_id')
+    @field_validator('reference_context_id')
     def validate_context_id(cls, v):
         if not v.strip():
             raise ValueError('reference_context_id cannot be empty')

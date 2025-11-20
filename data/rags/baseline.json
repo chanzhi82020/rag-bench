@@ -1,0 +1,19 @@
+{
+  "name": "baseline",
+  "model_info": {
+    "llm_model_id": "deepseek-ai/deepseek-v3.1",
+    "embedding_model_id": "embedding-3"
+  },
+  "rag_config": {
+    "top_k": 5,
+    "similarity_threshold": 0.0,
+    "retrieval_mode": "dense",
+    "max_length": 512,
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "batch_size": 1,
+    "timeout": 30,
+    "extra_params": {}
+  },
+  "created_at": "2025-11-24T10:30:25.213696"
+}

@@ -135,6 +135,59 @@ class GoldenDataset:
         
         return random.sample(records, n)
     
+    def create_subset(self, n: int, seed: Optional[int] = None) -> 'GoldenDataset':
+        """Create a subset dataset with n records
+        
+        This returns a new GoldenDataset object with a custom loader,
+        making it compatible with all dataset operations.
+        
+        Args:
+            n: Number of records to include
+            seed: Optional random seed for reproducibility
+            
+        Returns:
+            New GoldenDataset with subset of records
+        """
+        from rag_benchmark.datasets.loaders.base import BaseLoader
+        
+        # Get subset records
+        records = self.sample(n, seed)
+        
+        # Create a custom loader for the subset
+        class SubsetLoader(BaseLoader):
+            def __init__(self, golden_records: List[GoldenRecord], parent_loader: BaseLoader):
+                self.golden_records = golden_records
+                self.parent_loader = parent_loader
+                # Extract corpus IDs from golden records
+                self.corpus_ids = set()
+                for record in golden_records:
+                    if record.reference_context_ids:
+                        self.corpus_ids.update(record.reference_context_ids)
+            
+            def load_golden_records(self) -> Iterator[GoldenRecord]:
+                return iter(self.golden_records)
+            
+            def load_corpus_records(self) -> Iterator[CorpusRecord]:
+                # Only return corpus records referenced by golden records
+                for corpus_record in self.parent_loader.load_corpus_records():
+                    if corpus_record.reference_context_id in self.corpus_ids:
+                        yield corpus_record
+            
+            def count_records(self) -> int:
+                return len(self.golden_records)
+        
+        # Create new dataset with subset loader
+        subset_loader = SubsetLoader(records, self.loader)
+        subset_name = f"{self.name}_subset_{n}"
+        if self.subset:
+            subset_name = f"{self.name}_{self.subset}_subset_{n}"
+        
+        return GoldenDataset(
+            name=subset_name,
+            subset=None,
+            loader=subset_loader
+        )
+    
     def slice(self, start: int, end: Optional[int] = None, step: int = 1) -> List[GoldenRecord]:
         """Slice the dataset"""
         return list(self)[start:end:step]

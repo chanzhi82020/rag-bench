@@ -1,0 +1,13 @@
+{
+  "rag_name": "baseline",
+  "document_count": 100,
+  "embedding_dimension": 2048,
+  "index_type": "IndexFlatL2",
+  "created_at": "2025-11-24T10:31:10.159629",
+  "updated_at": "2025-11-24T10:31:10.159629",
+  "file_sizes": {
+    "index_faiss": 819245,
+    "corpus_json": 65769,
+    "embeddings_npy": 819328
+  }
+}

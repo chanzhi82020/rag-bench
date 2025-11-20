@@ -1,18 +1,32 @@
 """示例：使用自定义LLM和Embedding模型进行评测
 
 演示如何使用自定义的LLM和Embedding模型（如DeepSeek、智谱等）进行RAG评测
+
+Migration Note:
+    The ragas library now uses langchain LLMs and embeddings for evaluation.
+    Use ChatOpenAI from langchain_openai for custom model providers.
+    
+    For evaluation, use langchain LLMs:
+        from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+        llm = ChatOpenAI(model="gpt-4", api_key="...", base_url="...")
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key="...")
 """
+
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from pydantic import SecretStr
 
 from rag_benchmark.datasets import GoldenDataset
 from rag_benchmark.evaluate import evaluate
 from rag_benchmark.prepare import DummyRAG, RAGConfig, prepare_experiment_dataset
-from ragas.llms import llm_factory
-from ragas.embeddings import embedding_factory
 from ragas.metrics import answer_relevancy, faithfulness
 
 
 def example_with_custom_models():
-    """使用自定义模型进行评测"""
+    """使用自定义模型进行评测
+    
+    This example demonstrates using langchain LLMs with custom API endpoints
+    for ragas evaluation.
+    """
     print("=" * 80)
     print("Example: Evaluation with Custom Models")
     print("=" * 80)
@@ -20,21 +34,20 @@ def example_with_custom_models():
     # 1. 配置自定义模型
     print("\n1. Configuring custom models...")
     
-    # DeepSeek LLM (通过NVIDIA API)
-    eval_llm = llm_factory(
+    # Create DeepSeek LLM via NVIDIA API using langchain
+    # Note: ragas evaluation requires langchain LLMs, not instructor LLMs
+    eval_llm = ChatOpenAI(
         model="deepseek-ai/deepseek-v3.1",
+        api_key=SecretStr("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"),
         base_url="https://integrate.api.nvidia.com/v1",
-        api_key="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",
+        temperature=0.0,
     )
-    print("   ✓ Configured DeepSeek LLM via NVIDIA API")
-    
-    # 智谱 Embedding (GLM)
-    embedding_model = embedding_factory(
+    # Create 智谱 Embedding model using langchain
+    embedding_model = OpenAIEmbeddings(
         model="embedding-3",
+        api_key=SecretStr("7f08f66caad549708238a57e0f7f33f7.EfQ9HoYpYZqBCRFX"),
         base_url="https://open.bigmodel.cn/api/paas/v4/",
-        api_key="7f08f66caad549708238a57e0f7f33f7.EfQ9HoYpYZqBCRFX",
     )
-    print("   ✓ Configured GLM Embedding model")
 
     # 2. 准备实验数据
     print("\n2. Preparing experiment dataset...")
@@ -85,22 +98,7 @@ def example_with_custom_models():
 
         # 4. 查看结果
         print("\n4. Evaluation Results:")
-        print(f"   Name: {result.name}")
-        print(f"   Dataset size: {result.dataset_size}")
-        print(f"\n   Scores:")
-        for metric_name in result.list_metrics():
-            score = result.get_score(metric_name)
-            metric_detail = result.get_metric(metric_name)
-            print(f"     - {metric_name}:")
-            print(f"         Average: {score:.4f}")
-            print(f"         Min: {metric_detail.min_score:.4f}")
-            print(f"         Max: {metric_detail.max_score:.4f}")
-            print(f"         Std: {metric_detail.std_score:.4f}")
-
-        # 5. 保存结果
-        print("\n5. Saving results...")
-        result.save("output/evaluation_custom_models.json")
-        print("   Saved to: output/evaluation_custom_models.json")
+        print(f"    {result}")
 
         print("\n✓ Example completed successfully!\n")
         
@@ -113,62 +111,114 @@ def example_with_custom_models():
 
 
 def example_with_different_providers():
-    """演示使用不同提供商的模型"""
+    """演示使用不同提供商的模型
+    
+    Shows how to use langchain LLMs with various model providers for ragas evaluation.
+    """
     print("=" * 80)
     print("Example: Using Different Model Providers")
     print("=" * 80)
     
-    print("\n可用的模型配置示例：")
+    print("\n可用的模型配置示例 (Using Langchain):")
     print("\n1. OpenAI (官方):")
     print("""
-    from ragas.llms import llm_factory
-    from ragas.embeddings import embedding_factory
+    from langchain_openai import ChatOpenAI, OpenAIEmbeddings
     
-    llm = llm_factory(
-        model="gpt-4",
-        api_key="your-openai-api-key"
+    # Create LLM and embeddings using langchain
+    llm = ChatOpenAI(
+        model="gpt-4o-mini",
+        api_key="your-openai-api-key",
+        temperature=0.0
     )
-    embeddings = embedding_factory(
+    
+    embeddings = OpenAIEmbeddings(
         model="text-embedding-3-small",
-        api_key="your-openai-api-key"
+        openai_api_key="your-openai-api-key"
     )
     """)
     
     print("\n2. DeepSeek (通过NVIDIA API):")
     print("""
-    llm = llm_factory(
+    from langchain_openai import ChatOpenAI
+    
+    # Use ChatOpenAI with custom base_url for NVIDIA API
+    llm = ChatOpenAI(
         model="deepseek-ai/deepseek-v3.1",
+        api_key="your-nvidia-api-key",
         base_url="https://integrate.api.nvidia.com/v1",
-        api_key="your-nvidia-api-key"
+        temperature=0.0
     )
     """)
     
     print("\n3. 智谱AI (GLM):")
     print("""
-    embeddings = embedding_factory(
+    from langchain_openai import OpenAIEmbeddings
+    
+    # Use OpenAIEmbeddings with custom API base for GLM
+    embeddings = OpenAIEmbeddings(
         model="embedding-3",
-        base_url="https://open.bigmodel.cn/api/paas/v4/",
-        api_key="your-glm-api-key"
+        openai_api_key="your-glm-api-key",
+        openai_api_base="https://open.bigmodel.cn/api/paas/v4/"
     )
     """)
     
     print("\n4. Azure OpenAI:")
     print("""
-    llm = llm_factory(
-        model="gpt-4",
-        base_url="https://your-resource.openai.azure.com/",
+    from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
+    
+    # Use Azure-specific langchain classes
+    llm = AzureChatOpenAI(
+        azure_deployment="your-deployment-name",
         api_key="your-azure-api-key",
+        azure_endpoint="https://your-resource.openai.azure.com/",
         api_version="2024-02-15-preview"
+    )
+    
+    embeddings = AzureOpenAIEmbeddings(
+        azure_deployment="your-embedding-deployment",
+        api_key="your-azure-api-key",
+        azure_endpoint="https://your-resource.openai.azure.com/"
     )
     """)
     
     print("\n5. 本地模型 (Ollama):")
     print("""
-    llm = llm_factory(
+    from langchain_openai import ChatOpenAI
+    
+    # Use ChatOpenAI with Ollama endpoint
+    llm = ChatOpenAI(
         model="llama2",
+        api_key="ollama",  # Ollama doesn't require a real API key
         base_url="http://localhost:11434/v1",
-        api_key="ollama"  # Ollama不需要真实的API key
+        temperature=0.0
     )
+    """)
+    
+    print("\n" + "=" * 80)
+    print("Migration Guide:")
+    print("=" * 80)
+    print("""
+    For ragas evaluation, use langchain LLMs and embeddings:
+    
+    1. Import from langchain_openai:
+       - ChatOpenAI for LLMs
+       - OpenAIEmbeddings for embeddings
+    
+    2. Configure with your API credentials and endpoints
+    
+    3. Pass directly to evaluate():
+       result = evaluate(
+           dataset=exp_ds,
+           metrics=[faithfulness, answer_relevancy],
+           llm=llm,
+           embeddings=embeddings
+       )
+    
+    Note: llm_factory() and embedding_factory() create instructor-based
+    instances for structured output, not for evaluation. Use langchain
+    classes for evaluation instead.
+    
+    For more details, see: https://docs.ragas.io/en/latest/
     """)
 
 

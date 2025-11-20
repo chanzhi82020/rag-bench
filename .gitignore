@@ -34,3 +34,8 @@ node_modules/
 # Output files
 output/
 examples/output/
+# 任务数据
+data/tasks/*.json
+
+# 模型配置
+data/models.json
