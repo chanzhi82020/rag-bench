@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="uv (rag-bench)" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.11 (rag-bench)" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="uv (rag-bench)" project-jdk-type="Python SDK" />
 </project>

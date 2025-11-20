@@ -21,7 +21,7 @@ class DatasetRegistry:
         self._loaders: Dict[str, Type[BaseLoader]] = {
             "jsonl": JSONLLoader
         }
-        self._base_path = Path(__file__).parent.parent / "datasets" / "data"
+        self._base_path = Path(__file__).parent.parent.parent.parent / "scripts" / "datasets"
 
         # Register built-in datasets
         self._register_builtin_datasets()
