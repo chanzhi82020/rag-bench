@@ -15,6 +15,7 @@ Key Components:
 
 from ragas.dataset_schema import EvaluationDataset, SingleTurnSample
 
+from .baseline_rag import BaselineRAG
 from .dummy_rag import DummyRAG, SimpleRAG
 from .prepare import prepare_experiment_dataset
 from .rag_interface import (
@@ -39,4 +40,5 @@ __all__ = [
     # Example RAG Implementations
     "DummyRAG",
     "SimpleRAG",
+    "BaselineRAG",
 ]

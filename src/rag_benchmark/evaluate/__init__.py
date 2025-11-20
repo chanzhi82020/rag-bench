@@ -27,16 +27,31 @@ Example:
 """
 
 from .evaluator import evaluate, evaluate_e2e, evaluate_generation, evaluate_retrieval
-from .results import EvaluationResult, MetricResult
+from . import metrics_retrieval
 
-__version__ = "0.1.0"
+# Import RAGAS-compatible metric classes
+from .metrics_retrieval import (
+    RecallAtK,
+    PrecisionAtK,
+    F1AtK,
+    NDCGAtK,
+    MRRMetric,
+    MAPMetric,
+)
+
+__version__ = "0.2.0"
 __all__ = [
     # Core Functions
     "evaluate",
     "evaluate_e2e",
     "evaluate_retrieval",
     "evaluate_generation",
-    # Result Classes
-    "EvaluationResult",
-    "MetricResult",
+    # RAGAS-compatible Metric Classes
+    "RecallAtK",
+    "PrecisionAtK",
+    "F1AtK",
+    "NDCGAtK",
+    "MRRMetric",
+    "MAPMetric",
+    # Pre-defined metric instances
 ]
