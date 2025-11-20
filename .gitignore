@@ -31,10 +31,6 @@ coverage.xml
 # nodejs
 node_modules/
 
-# Dataset files (should be downloaded separately or managed externally)
-scripts/datasets/
-scripts/data/
-
 # Output files
 output/
 examples/output/
