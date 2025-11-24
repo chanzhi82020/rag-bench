@@ -1,5 +1,5 @@
 """测试Analysis模块"""
-
+import asyncio
 import os
 
 import pytest
@@ -58,16 +58,16 @@ def evaluation_results(sample_golden_dataset):
     rag2 = SimpleRAG(corpus=corpus)
     
     # 生成实验数据集
-    exp_ds1 = prepare_experiment_dataset(sample_golden_dataset, rag1)
-    exp_ds2 = prepare_experiment_dataset(sample_golden_dataset, rag2)
+    exp_ds1 = asyncio.run(prepare_experiment_dataset(sample_golden_dataset, rag1))
+    exp_ds2 = asyncio.run(prepare_experiment_dataset(sample_golden_dataset, rag2))
     
     # 评测
-    result1 = evaluate_e2e(exp_ds1, experiment_name="test_rag1")
-    result2 = evaluate_e2e(exp_ds2, experiment_name="test_rag2")
+    result1 = asyncio.run(evaluate_e2e(exp_ds1, experiment_name="test_rag1"))
+    result2 = asyncio.run(evaluate_e2e(exp_ds2, experiment_name="test_rag2"))
     
     return [result1, result2]
 
-
+@pytest.mark.asyncio
 def test_compare_results(evaluation_results):
     """测试结果对比功能"""
     comparison = compare_results(

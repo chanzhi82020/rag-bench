@@ -35,7 +35,9 @@ node_modules/
 output/
 examples/output/
 # 任务数据
-data/tasks/*.json
+data/tasks/
+data/rags/
+data/indices/
 
 # 模型配置
 data/models.json

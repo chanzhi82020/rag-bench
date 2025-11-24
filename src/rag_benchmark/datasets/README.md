@@ -26,7 +26,7 @@ pip install pydantic tqdm datasets
 ### Basic Usage
 
 ```python
-from src.rag_benchmark.datasets import (
+from rag_benchmark.datasets import (
     load_golden_dataset,
     list_golden_datasets,
     validate_dataset
@@ -87,7 +87,7 @@ A Golden Dataset consists of three main files:
 ### Loading Datasets
 
 ```python
-from src.rag_benchmark.datasets import load_golden_dataset, load_corpus_dataset
+from rag_benchmark.datasets import load_golden_dataset, load_corpus_dataset
 
 # Stream golden records (memory efficient)
 for record in load_golden_dataset("hotpotqa", streaming=True):
@@ -104,7 +104,7 @@ for doc in load_corpus_dataset("hotpotqa"):
 ### Listing Datasets
 
 ```python
-from src.rag_benchmark.datasets import list_golden_datasets, get_dataset_metadata
+from rag_benchmark.datasets import list_golden_datasets, get_dataset_metadata
 
 # List all registered datasets
 all_datasets = list_golden_datasets()
@@ -120,7 +120,7 @@ print(metadata)
 ### Validating Datasets
 
 ```python
-from src.rag_benchmark.datasets.validators import validate_dataset
+from rag_benchmark.datasets.validators import validate_dataset
 
 # Validate a dataset
 result = validate_dataset("path/to/dataset")
@@ -141,7 +141,7 @@ print("Statistics:", result.statistics)
 ### Convert HotpotQA
 
 ```python
-from src.rag_benchmark.datasets import convert_dataset
+from rag_benchmark.datasets import convert_dataset
 
 # Convert HotpotQA dataset
 result = convert_dataset(
@@ -157,7 +157,7 @@ print(f"Converted {result.converted_records} records")
 ### Convert Natural Questions
 
 ```python
-from src.rag_benchmark.datasets import create_nq_converter
+from rag_benchmark.datasets import create_nq_converter
 
 # Create NQ converter
 converter = create_nq_converter(
@@ -172,8 +172,8 @@ result = converter.convert("google-research-datasets/natural_questions")
 ### Create Custom Dataset
 
 ```python
-from src.rag_benchmark.datasets.loaders import JSONLLoader
-from src.rag_benchmark.datasets.schemas.golden import GoldenRecord, CorpusRecord
+from rag_benchmark.datasets.loaders import JSONLLoader
+from rag_benchmark.datasets.schemas.golden import GoldenRecord, CorpusRecord
 
 # Create custom loader
 loader = JSONLLoader("path/to/custom/dataset")
@@ -231,7 +231,7 @@ See the `examples/` directory for detailed examples:
 ### Adding New Loaders
 
 ```python
-from src.rag_benchmark.datasets.loaders.base import BaseLoader
+from rag_benchmark.datasets.loaders.base import BaseLoader
 
 
 class MyCustomLoader(BaseLoader):
@@ -247,7 +247,7 @@ class MyCustomLoader(BaseLoader):
 ### Adding New Converters
 
 ```python
-from src.rag_benchmark.datasets.converters.base import BaseConverter
+from scripts.converters import BaseConverter
 
 
 class MyConverter(BaseConverter):

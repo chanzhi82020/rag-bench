@@ -1,7 +1,8 @@
 """Tests for RAGAS integration of retrieval metrics"""
 
 import pytest
-from ragas.dataset_schema import SingleTurnSample, EvaluationDataset
+from ragas.dataset_schema import SingleTurnSample
+
 from rag_benchmark.evaluate.metrics_retrieval import (
     RecallAtK,
     PrecisionAtK,
@@ -144,52 +145,6 @@ def test_missing_context_ids():
     
     score = metric.single_turn_score(sample)
     assert score == 0.0  # Should return 0.0 for missing data
-
-
-def test_metric_with_evaluate_function():
-    """Test that metrics can be used with evaluate() function"""
-    from rag_benchmark.evaluate import evaluate
-    from ragas.metrics import faithfulness
-    
-    # Create a small test dataset
-    samples = [
-        SingleTurnSample(
-            user_input="query1",
-            retrieved_contexts=["ctx1", "ctx2", "ctx3"],
-            response="response1",
-            reference="ref1",
-            retrieved_context_ids=["doc1", "doc2", "doc3"],
-            reference_context_ids=["doc2", "doc5"]
-        ),
-        SingleTurnSample(
-            user_input="query2",
-            retrieved_contexts=["ctx4", "ctx5", "ctx6"],
-            response="response2",
-            reference="ref2",
-            retrieved_context_ids=["doc4", "doc5", "doc6"],
-            reference_context_ids=["doc5", "doc7"]
-        ),
-    ]
-    
-    dataset = EvaluationDataset(samples=samples)
-    
-    # Test with only IR metrics (no LLM needed)
-    result = evaluate(
-        dataset=dataset,
-        metrics=[RecallAtK(k=3), PrecisionAtK(k=3), MRRMetric()],
-        name="test_ir_metrics",
-        show_progress=False
-    )
-    
-    # Check results
-    assert "recall@3" in result.list_metrics()
-    assert "precision@3" in result.list_metrics()
-    assert "mrr" in result.list_metrics()
-    
-    # Check scores are valid
-    assert 0.0 <= result.get_score("recall@3") <= 1.0
-    assert 0.0 <= result.get_score("precision@3") <= 1.0
-    assert 0.0 <= result.get_score("mrr") <= 1.0
 
 
 if __name__ == "__main__":

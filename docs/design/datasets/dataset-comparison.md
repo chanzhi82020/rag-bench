@@ -231,7 +231,7 @@ Context: "巴黎是法国的首都和最大城市..." (Paris is the capital and 
 ### HotpotQA
 
 ```python
-from rag_benchmark.datasets.converters import HotpotQAConverter
+from scripts.converters import HotpotQAConverter
 
 # Distractor variant
 converter = HotpotQAConverter(
@@ -251,7 +251,7 @@ result = converter.convert("hotpotqa/hotpot_qa")
 ### Natural Questions
 
 ```python
-from rag_benchmark.datasets.converters import NaturalQuestionsConverter
+from scripts.converters import NaturalQuestionsConverter
 
 # Validation split
 converter = NaturalQuestionsConverter(
@@ -264,7 +264,7 @@ result = converter.convert("google-research-datasets/natural_questions")
 ### XQuAD
 
 ```python
-from rag_benchmark.datasets.converters import XQuADConverter
+from scripts.converters import XQuADConverter
 
 # Chinese
 converter = XQuADConverter(

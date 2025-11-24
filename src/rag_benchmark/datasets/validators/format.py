@@ -1,11 +1,10 @@
 """Format validation utilities for datasets"""
 
 import re
-from typing import List, Dict, Any, Set
 from pathlib import Path
+from typing import List
 
 from rag_benchmark.datasets.schemas.golden import GoldenRecord, CorpusRecord
-from rag_benchmark.datasets.loaders.base import ValidationResult
 
 
 class FormatValidator:

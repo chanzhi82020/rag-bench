@@ -1,13 +1,12 @@
 """核心评估器实现"""
 
 import logging
-from datetime import datetime
 from typing import Optional, Union
 
 from langchain_core.callbacks import Callbacks
 from langchain_core.embeddings import Embeddings as LangchainEmbeddings
 from langchain_core.language_models import BaseLanguageModel as LangchainLLM
-from ragas import evaluate
+from ragas import aevaluate
 from ragas.dataset_schema import EvaluationDataset, EvaluationResult
 from ragas.embeddings.base import BaseRagasEmbeddings
 from ragas.executor import Executor
@@ -26,7 +25,7 @@ from rag_benchmark.evaluate.metrics_retrieval import RecallAtK, PrecisionAtK, F1
 logger = logging.getLogger(__name__)
 
 
-def evaluate_retrieval(
+async def evaluate_retrieval(
     dataset: EvaluationDataset,
     experiment_name: Optional[str] = None,
     llm: Optional[Union[BaseRagasLLM, LangchainLLM]] = None,
@@ -53,9 +52,6 @@ def evaluate_retrieval(
     Returns:
         EvaluationResult实例或Executor实例
 
-    Example:
-        >>> result = evaluate_retrieval(exp_ds, experiment_name="retrieval_test")
-        >>> print(f"Context Recall: {result['context_recall']}")
     """
 
     retrieval_metrics = [context_recall, context_precision]
@@ -68,7 +64,7 @@ def evaluate_retrieval(
             NDCGAtK()
         ])
 
-    return evaluate(
+    return await aevaluate(
         dataset=dataset,
         metrics=retrieval_metrics,
         experiment_name=experiment_name,
@@ -81,7 +77,7 @@ def evaluate_retrieval(
     )
 
 
-def evaluate_generation(
+async def evaluate_generation(
     dataset: EvaluationDataset,
     experiment_name: Optional[str] = None,
     llm: Optional[Union[BaseRagasLLM, LangchainLLM]] = None,
@@ -107,14 +103,10 @@ def evaluate_generation(
 
     Returns:
         EvaluationResult实例或Executor实例
-
-    Example:
-        >>> result = evaluate_generation(exp_ds, name="generation_test")
-        >>> print(f"Faithfulness: {result.to_pandas()}")
     """
 
     generate_metrics = [faithfulness, answer_correctness]
-    return evaluate(
+    return await aevaluate(
         dataset=dataset,
         metrics=generate_metrics,
         experiment_name=experiment_name,
@@ -127,7 +119,7 @@ def evaluate_generation(
     )
 
 
-def evaluate_e2e(
+async def evaluate_e2e(
     dataset: EvaluationDataset,
     experiment_name: Optional[str] = None,
     llm: Optional[Union[BaseRagasLLM, LangchainLLM]] = None,
@@ -154,9 +146,6 @@ def evaluate_e2e(
     Returns:
         EvaluationResult实例或Executor实例
 
-    Example:
-        >>> result = evaluate_e2e(exp_ds, name="e2e_test")
-        >>> print(result.to_pandas())
     """
     e2e_metrics = [faithfulness, answer_relevancy, context_precision, context_recall]
     sample = dataset[0]
@@ -167,7 +156,7 @@ def evaluate_e2e(
             F1AtK(),
             NDCGAtK()
         ])
-    return evaluate(
+    return await aevaluate(
         dataset=dataset,
         metrics=e2e_metrics,
         experiment_name=experiment_name,

@@ -290,9 +290,10 @@ for record in short_questions:
 ```
 
 ### Pattern 3: Subset Creation
+
 ```python
 dataset = GoldenDataset("hotpotqa")
-subset = dataset.create_subset(100, seed=42)  # Returns GoldenDataset
+subset = dataset.select_random(100, seed=42)  # Returns GoldenDataset
 # subset can be used anywhere GoldenDataset is expected
 ```
 

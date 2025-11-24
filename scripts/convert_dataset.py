@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Union
 
-from rag_benchmark.datasets.converters import (
+from scripts.converters import (
     convert_dataset,
     list_available_converters
 )

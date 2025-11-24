@@ -28,9 +28,6 @@ from .schemas.golden import (
 from .loaders.base import BaseLoader, ValidationResult
 from .loaders.jsonl import JSONLLoader
 
-# Converters
-from .converters.base import BaseConverter, ConversionResult
-
 # Registry
 from .registry import (
     DatasetRegistry,
@@ -58,7 +55,7 @@ __all__ = [
     "GoldenDataset",
     "DatasetView",
     "load_dataset",
-    
+
     # Schemas
     "GoldenRecord",
     "CorpusRecord",
@@ -68,16 +65,11 @@ __all__ = [
     "DatasetMetadataModel",
     "parse_golden_record",
     "parse_corpus_record",
-    
+
     # Loaders
     "BaseLoader",
     "JSONLLoader",
     "ValidationResult",
-    
-    # Converters
-    "BaseConverter",
-    "ConversionResult",
-    
     # Registry
     "DatasetRegistry",
     "DATASET_REGISTRY",
@@ -92,7 +84,7 @@ __all__ = [
     "get_dataset_sample",
     "count_dataset_records",
     "create_custom_loader",
-    
+
     # Validators
     "FormatValidator",
     "QualityValidator",

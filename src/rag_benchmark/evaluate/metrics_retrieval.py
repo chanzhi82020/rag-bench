@@ -5,8 +5,13 @@
 """
 
 import logging
-from typing import List, Optional, Set
+from dataclasses import dataclass, field
+from typing import List, Optional
+
 import numpy as np
+from langchain_core.callbacks import Callbacks
+from ragas.dataset_schema import SingleTurnSample
+from ragas.metrics.base import SingleTurnMetric, MetricType
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +238,7 @@ def average_precision(
 def compute_retrieval_metrics(
     retrieved_ids_list: List[List[str]],
     reference_ids_list: List[List[str]],
-    k_values: List[int] = [1, 3, 5, 10]
+    k_values=None
 ) -> dict:
     """批量计算检索指标
     
@@ -258,10 +263,11 @@ def compute_retrieval_metrics(
         >>> print(metrics["recall@5"])
         0.5
     """
+    if k_values is None:
+        k_values = [1, 3, 5, 10]
     if len(retrieved_ids_list) != len(reference_ids_list):
         raise ValueError("retrieved_ids_list and reference_ids_list must have same length")
     
-    n_samples = len(retrieved_ids_list)
     results = {}
     
     # 计算各种k值的指标
@@ -302,10 +308,6 @@ def compute_retrieval_metrics(
 # ============================================================================
 # 以下类将传统IR指标包装为RAGAS Metric，使其可以与evaluate()函数集成
 
-from dataclasses import dataclass, field
-from ragas.metrics.base import SingleTurnMetric, MetricType
-from ragas.dataset_schema import SingleTurnSample
-from langchain_core.callbacks import Callbacks
 
 
 @dataclass
@@ -317,19 +319,14 @@ class RecallAtK(SingleTurnMetric):
     Args:
         k: 只考虑前k个检索结果
         
-    Example:
-        >>> from rag_benchmark.evaluate import evaluate
-        >>> from rag_benchmark.evaluate.metrics_retrieval import RecallAtK
-        >>> 
-        >>> result = evaluate(
-        ...     dataset=exp_ds,
-        ...     metrics=[RecallAtK(k=5)],
-        ...     name="retrieval_eval"
-        ... )
     """
     
     k: int = 5
-    name: str = field(default=f"recall@{k}", repr=True)
+    name: str = field(init=False, repr=True)
+
+    def __post_init__(self):
+        """在对象初始化后自动调用，用于动态设置name属性。"""
+        self.name = f"recall@{self.k}"
 
     _required_columns: dict[MetricType, set[str]] = field(
         default_factory=lambda: {
@@ -378,7 +375,11 @@ class PrecisionAtK(SingleTurnMetric):
         }
     )
 
-    name: str = field(default=f"precision@{k}", repr=True)
+    name: str = field(init=False, repr=True)
+
+    def __post_init__(self):
+        """在对象初始化后自动调用，用于动态设置name属性。"""
+        self.name = f"precision@{self.k}"
 
     def init(self, run_config):
         """Initialize the metric (required by RAGAS)"""
@@ -417,7 +418,11 @@ class F1AtK(SingleTurnMetric):
         }
     )
 
-    name: str = field(default=f"f1@{k}", repr=True)
+    name: str = field(init=False, repr=True)
+
+    def __post_init__(self):
+        """在对象初始化后自动调用，用于动态设置name属性。"""
+        self.name = f"f1@{self.k}"
 
     def init(self, run_config):
         """Initialize the metric (required by RAGAS)"""
@@ -455,7 +460,12 @@ class NDCGAtK(SingleTurnMetric):
             },
         }
     )
-    name: str = field(default=f"ndcg@{k}", repr=True)
+    name: str = field(init=False, repr=True)
+
+    def __post_init__(self):
+        """在对象初始化后自动调用，用于动态设置name属性。"""
+        self.name = f"ndcg@{self.k}"
+
 
     def init(self, run_config):
         """Initialize the metric (required by RAGAS)"""

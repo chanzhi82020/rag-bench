@@ -9,6 +9,7 @@ import json
 @dataclass
 class GoldenRecord:
     """A single record in a Golden Dataset"""
+    id: str = field(metadata={"description": "Unique identifier for this record"})
     user_input: str = field(metadata={"description": "User question or query"})
     reference: str = field(metadata={"description": "Reference answer"})
     reference_contexts: List[str] = field(metadata={"description": "List of relevant context passages"})
@@ -24,6 +25,7 @@ class GoldenRecord:
 
 class GoldenRecordModel(BaseModel):
     """Pydantic model for Golden Record validation"""
+    id: str = Field(..., min_length=1, description="Unique identifier for this record")
     user_input: str = Field(..., min_length=1, description="User question or query")
     reference: str = Field(..., min_length=1, description="Reference answer")
     reference_contexts: List[str] = Field(..., min_length=1, description="List of relevant context passages")
@@ -32,6 +34,12 @@ class GoldenRecordModel(BaseModel):
         description="Optional list of context IDs"
     )
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    
+    @field_validator('id')
+    def validate_id(cls, v):
+        if not v.strip():
+            raise ValueError('id cannot be empty')
+        return v
     
     @field_validator('user_input')
     def validate_user_input(cls, v):
@@ -117,14 +125,24 @@ class DatasetMetadataModel(BaseModel):
 
 
 def parse_golden_record(data: Union[Dict, str]) -> GoldenRecord:
-    """Parse a GoldenRecord from dict or JSON string"""
+    """Parse a GoldenRecord from dict or JSON string
+    
+    If the 'id' field is missing from the data, a UUID will be generated.
+    This provides backward compatibility during the transition period.
+    """
     if isinstance(data, str):
         data = json.loads(data)
+    
+    # Generate ID if missing (backward compatibility)
+    if 'id' not in data:
+        import uuid
+        data['id'] = str(uuid.uuid4())
     
     # Validate with Pydantic
     validated = GoldenRecordModel(**data)
     
     return GoldenRecord(
+        id=validated.id,
         user_input=validated.user_input,
         reference=validated.reference,
         reference_contexts=validated.reference_contexts,

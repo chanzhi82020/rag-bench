@@ -1,8 +1,12 @@
 """RAG系统抽象接口定义"""
-
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
+from watchfiles import awatch
+
+from rag_benchmark.common.executor import task_wrapper
 
 
 @dataclass
@@ -99,7 +103,7 @@ class RAGConfig:
     top_p: float = 0.9
 
     # 其他配置
-    batch_size: int = 1
+    batch_size: int = 10
     timeout: int = 30
     extra_params: Dict[str, Any] = field(default_factory=dict)
 
@@ -123,15 +127,6 @@ class RAGInterface(ABC):
 
     用户需要实现此接口来集成自己的RAG系统。
 
-    Example:
-        >>> class MyRAG(RAGInterface):
-        ...     def retrieve(self, query: str, top_k: int = 5) -> List[str]:
-        ...         # 实现检索逻辑
-        ...         return ["context1", "context2"]
-        ...
-        ...     def generate(self, query: str, contexts: List[str]) -> str:
-        ...         # 实现生成逻辑
-        ...         return "generated answer"
     """
 
     def __init__(self, config: Optional[RAGConfig] = None):
@@ -141,9 +136,10 @@ class RAGInterface(ABC):
             config: RAG配置，如果为None则使用默认配置
         """
         self.config = config or RAGConfig()
+        self.semaphore = asyncio.Semaphore(self.config.batch_size)
 
     @abstractmethod
-    def retrieve(self, query: str, top_k: Optional[int] = None) -> RetrievalResult:
+    async def retrieve(self, query: str, top_k: Optional[int] = None) -> RetrievalResult:
         """检索相关上下文
 
         Args:
@@ -155,22 +151,11 @@ class RAGInterface(ABC):
 
         Raises:
             NotImplementedError: 子类必须实现此方法
-            
-        Example:
-            >>> def retrieve(self, query: str, top_k: Optional[int] = None) -> RetrievalResult:
-            ...     contexts = ["context1", "context2"]
-            ...     context_ids = ["id1", "id2"]
-            ...     scores = [0.95, 0.87]
-            ...     return RetrievalResult(
-            ...         contexts=contexts,
-            ...         context_ids=context_ids,
-            ...         scores=scores
-            ...     )
         """
         raise NotImplementedError("Subclass must implement retrieve()")
 
     @abstractmethod
-    def generate(self, query: str, contexts: List[str]) -> GenerationResult:
+    async def generate(self, query: str, contexts: List[str]) -> GenerationResult:
         """基于上下文生成答案
 
         Args:
@@ -183,18 +168,10 @@ class RAGInterface(ABC):
         Raises:
             NotImplementedError: 子类必须实现此方法
             
-        Example:
-            >>> def generate(self, query: str, contexts: List[str]) -> GenerationResult:
-            ...     response = "main answer"
-            ...     return GenerationResult(
-            ...         response=response,
-            ...         multi_responses=["answer1", "answer2"],
-            ...         confidence=0.92
-            ...     )
         """
         raise NotImplementedError("Subclass must implement generate()")
 
-    def retrieve_and_generate(
+    async def retrieve_and_generate(
         self, query: str, top_k: Optional[int] = None
     ) -> Tuple[RetrievalResult, GenerationResult]:
         """检索并生成答案（便捷方法）
@@ -206,11 +183,11 @@ class RAGInterface(ABC):
         Returns:
             (RetrievalResult, GenerationResult)元组
         """
-        retrieval_result = self.retrieve(query, top_k)
-        generation_result = self.generate(query, retrieval_result.contexts)
+        retrieval_result = await self.retrieve(query, top_k)
+        generation_result = await self.generate(query, retrieval_result.contexts)
         return retrieval_result, generation_result
 
-    def batch_retrieve(
+    async def batch_retrieve(
         self, queries: List[str], top_k: Optional[int] = None
     ) -> List[RetrievalResult]:
         """批量检索（默认实现，子类可以重写以优化性能）
@@ -222,9 +199,13 @@ class RAGInterface(ABC):
         Returns:
             每个查询对应的RetrievalResult列表
         """
-        return [self.retrieve(query, top_k) for query in queries]
+        tasks = [
+            task_wrapper(self.semaphore, self.retrieve, query=query, top_k=top_k)
+            for query in queries
+        ]
+        return await asyncio.gather(*tasks)
 
-    def batch_generate(
+    async def batch_generate(
         self, queries: List[str], contexts_list: List[List[str]]
     ) -> List[GenerationResult]:
         """批量生成（默认实现，子类可以重写以优化性能）
@@ -236,12 +217,13 @@ class RAGInterface(ABC):
         Returns:
             每个查询对应的GenerationResult列表
         """
-        return [
-            self.generate(query, contexts)
+        tasks = [
+            task_wrapper(self.semaphore, self.generate, query=query, contexts=contexts)
             for query, contexts in zip(queries, contexts_list)
         ]
+        return await asyncio.gather(*tasks)
 
-    def batch_retrieve_and_generate(
+    async def batch_retrieve_and_generate(
         self, queries: List[str], top_k: Optional[int] = None
     ) -> List[Tuple[RetrievalResult, GenerationResult]]:
         """批量检索并生成（默认实现，子类可以重写以优化性能）
@@ -253,8 +235,8 @@ class RAGInterface(ABC):
         Returns:
             每个查询对应的(RetrievalResult, GenerationResult)元组列表
         """
-        retrieval_results = self.batch_retrieve(queries, top_k)
-        generation_results = self.batch_generate(
+        retrieval_results = await self.batch_retrieve(queries, top_k)
+        generation_results = await self.batch_generate(
             queries, [r.contexts for r in retrieval_results]
         )
         return list(zip(retrieval_results, generation_results))

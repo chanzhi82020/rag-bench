@@ -8,25 +8,9 @@ Key Components:
 - EvaluationResult: Structured evaluation results
 - MetricResult: Individual metric results
 - Evaluation configurations and utilities
-
-Example:
-    >>> from ragas.dataset_schema import EvaluationDataset
-    >>> from rag_benchmark.evaluate import evaluate
-    >>> from ragas.metrics import faithfulness, answer_relevancy
-    >>>
-    >>> # Evaluate RAG system
-    >>> result = evaluate(
-    ...     dataset=evaluation_dataset,
-    ...     metrics=[faithfulness, answer_relevancy],
-    ...     name="my_rag_system"
-    ... )
-    >>>
-    >>> # View results
-    >>> print(result.summary())
-    >>> result.save("results/evaluation.json")
 """
 
-from .evaluator import evaluate, evaluate_e2e, evaluate_generation, evaluate_retrieval
+from .evaluator import aevaluate, evaluate_e2e, evaluate_generation, evaluate_retrieval
 from . import metrics_retrieval
 
 # Import RAGAS-compatible metric classes
@@ -42,7 +26,7 @@ from .metrics_retrieval import (
 __version__ = "0.2.0"
 __all__ = [
     # Core Functions
-    "evaluate",
+    "aevaluate",
     "evaluate_e2e",
     "evaluate_retrieval",
     "evaluate_generation",

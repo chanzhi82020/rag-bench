@@ -1,6 +1,6 @@
 """Golden Dataset interface for unified dataset access and manipulation"""
 
-from typing import Iterator, List, Dict, Any, Optional, Union, Callable
+from typing import Iterator, List, Dict, Any, Optional, Union, Callable, Tuple
 from pathlib import Path
 import logging
 
@@ -9,6 +9,56 @@ from rag_benchmark.datasets.loaders.base import BaseLoader
 from rag_benchmark.datasets.registry import DATASET_REGISTRY
 
 logger = logging.getLogger(__name__)
+
+
+class SelectedSamplesLoader(BaseLoader):
+    """Loader for a subset of golden records selected by IDs"""
+    
+    def __init__(self, golden_records: List[GoldenRecord], parent_loader: BaseLoader):
+        self.golden_records = golden_records
+        self.parent_loader = parent_loader
+        # Extract corpus IDs from golden records
+        self.corpus_ids = set()
+        for record in golden_records:
+            if record.reference_context_ids:
+                self.corpus_ids.update(record.reference_context_ids)
+    
+    def load_golden_records(self) -> Iterator[GoldenRecord]:
+        return iter(self.golden_records)
+    
+    def load_corpus_records(self) -> Iterator[CorpusRecord]:
+        # Only return corpus records referenced by golden records
+        for corpus_record in self.parent_loader.load_corpus_records():
+            if corpus_record.reference_context_id in self.corpus_ids:
+                yield corpus_record
+    
+    def count_records(self) -> int:
+        return len(self.golden_records)
+
+
+class SubsetLoader(BaseLoader):
+    """Loader for a random subset of golden records"""
+    
+    def __init__(self, golden_records: List[GoldenRecord], parent_loader: BaseLoader):
+        self.golden_records = golden_records
+        self.parent_loader = parent_loader
+        # Extract corpus IDs from golden records
+        self.corpus_ids = set()
+        for record in golden_records:
+            if record.reference_context_ids:
+                self.corpus_ids.update(record.reference_context_ids)
+    
+    def load_golden_records(self) -> Iterator[GoldenRecord]:
+        return iter(self.golden_records)
+    
+    def load_corpus_records(self) -> Iterator[CorpusRecord]:
+        # Only return corpus records referenced by golden records
+        for corpus_record in self.parent_loader.load_corpus_records():
+            if corpus_record.reference_context_id in self.corpus_ids:
+                yield corpus_record
+    
+    def count_records(self) -> int:
+        return len(self.golden_records)
 
 
 class DatasetView:
@@ -135,7 +185,54 @@ class GoldenDataset:
         
         return random.sample(records, n)
     
-    def create_subset(self, n: int, seed: Optional[int] = None) -> 'GoldenDataset':
+    def get_record_ids(self) -> List[str]:
+        """Get all record IDs in the dataset
+        
+        Returns:
+            List of all record IDs
+        """
+        return [record.id for record in self]
+    
+    def select_by_ids(self, record_ids: List[str]) -> 'GoldenDataset':
+        """Select specific records by their IDs
+        
+        This method creates a new GoldenDataset with only the selected records,
+        and filters corpus records to only include those referenced by the selected records.
+        
+        Args:
+            record_ids: List of record IDs
+            
+        Returns:
+            New GoldenDataset with selected records
+            
+        Raises:
+            ValueError: If any record ID is invalid
+        """
+        # Load all records and create ID -> record mapping
+        all_records = list(self)
+        id_to_record = {record.id: record for record in all_records}
+        
+        # Validate IDs
+        invalid_ids = [rid for rid in record_ids if rid not in id_to_record]
+        if invalid_ids:
+            raise ValueError(f"Invalid record IDs: {invalid_ids}")
+        
+        # Select records (preserving order and allowing duplicates)
+        selected_records = [id_to_record[rid] for rid in record_ids]
+        
+        # Create new dataset with selected samples
+        selected_loader = SelectedSamplesLoader(selected_records, self.loader)
+        subset_name = f"{self.name}_selected_{len(record_ids)}"
+        if self.subset:
+            subset_name = f"{self.name}_{self.subset}_selected_{len(record_ids)}"
+        
+        return GoldenDataset(
+            name=subset_name,
+            subset=None,
+            loader=selected_loader
+        )
+    
+    def select_random(self, n: int, seed: Optional[int] = None) -> 'GoldenDataset':
         """Create a subset dataset with n records
         
         This returns a new GoldenDataset object with a custom loader,
@@ -148,33 +245,8 @@ class GoldenDataset:
         Returns:
             New GoldenDataset with subset of records
         """
-        from rag_benchmark.datasets.loaders.base import BaseLoader
-        
         # Get subset records
         records = self.sample(n, seed)
-        
-        # Create a custom loader for the subset
-        class SubsetLoader(BaseLoader):
-            def __init__(self, golden_records: List[GoldenRecord], parent_loader: BaseLoader):
-                self.golden_records = golden_records
-                self.parent_loader = parent_loader
-                # Extract corpus IDs from golden records
-                self.corpus_ids = set()
-                for record in golden_records:
-                    if record.reference_context_ids:
-                        self.corpus_ids.update(record.reference_context_ids)
-            
-            def load_golden_records(self) -> Iterator[GoldenRecord]:
-                return iter(self.golden_records)
-            
-            def load_corpus_records(self) -> Iterator[CorpusRecord]:
-                # Only return corpus records referenced by golden records
-                for corpus_record in self.parent_loader.load_corpus_records():
-                    if corpus_record.reference_context_id in self.corpus_ids:
-                        yield corpus_record
-            
-            def count_records(self) -> int:
-                return len(self.golden_records)
         
         # Create new dataset with subset loader
         subset_loader = SubsetLoader(records, self.loader)
@@ -204,6 +276,89 @@ class GoldenDataset:
     def count(self) -> int:
         """Count the number of records"""
         return self.loader.count_records()
+    
+    def paginate(self, page: int, page_size: int) -> Tuple[List[GoldenRecord], int]:
+        """Get paginated records and total count
+        
+        Args:
+            page: Page number (1-indexed)
+            page_size: Number of records per page
+            
+        Returns:
+            Tuple of (paginated records, total count)
+            
+        Raises:
+            ValueError: If page < 1 or page_size < 1
+        """
+        if page < 1:
+            raise ValueError("Page number must be >= 1")
+        if page_size < 1:
+            raise ValueError("Page size must be >= 1")
+        
+        # Get all records and total count
+        all_records = list(self)
+        total_count = len(all_records)
+        
+        # Calculate start and end indices
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        
+        # Return paginated records
+        paginated_records = all_records[start_idx:end_idx]
+        
+        return paginated_records, total_count
+    
+    def search(self, query: str, case_sensitive: bool = False) -> 'GoldenDataset':
+        """Search samples by user_input text
+        
+        Args:
+            query: Search query string
+            case_sensitive: Whether to perform case-sensitive search
+            
+        Returns:
+            New GoldenDataset with filtered records
+        """
+        # Prepare query for comparison
+        search_query = query if case_sensitive else query.lower()
+        
+        # Filter records
+        filtered_records = []
+        for record in self:
+            user_input = record.user_input if case_sensitive else record.user_input.lower()
+            if search_query in user_input:
+                filtered_records.append(record)
+        
+        # Create new dataset with filtered records
+        filtered_loader = SubsetLoader(filtered_records, self.loader)
+        subset_name = f"{self.name}_search"
+        if self.subset:
+            subset_name = f"{self.name}_{self.subset}_search"
+        
+        return GoldenDataset(
+            name=subset_name,
+            subset=None,
+            loader=filtered_loader
+        )
+    
+    def get_corpus_by_ids(self, doc_ids: List[str]) -> List[CorpusRecord]:
+        """Get specific corpus documents by IDs
+        
+        Args:
+            doc_ids: List of document IDs to retrieve
+            
+        Returns:
+            List of CorpusRecord objects matching the IDs
+        """
+        # Convert to set for faster lookup
+        doc_ids_set = set(doc_ids)
+        
+        # Filter corpus records
+        matching_records = []
+        for corpus_record in self.iter_corpus():
+            if corpus_record.reference_context_id in doc_ids_set:
+                matching_records.append(corpus_record)
+        
+        return matching_records
     
     def stats(self) -> Dict[str, Any]:
         """Get dataset statistics"""

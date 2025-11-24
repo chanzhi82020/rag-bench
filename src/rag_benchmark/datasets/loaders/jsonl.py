@@ -2,6 +2,7 @@
 
 import json
 import logging
+import uuid
 from typing import Iterator, List, Dict, Any, Optional, Union
 from pathlib import Path
 
@@ -40,7 +41,11 @@ class JSONLLoader(BaseLoader):
                 logger.warning(f"Failed to load metadata: {e}")
     
     def load_golden_records(self) -> Iterator[GoldenRecord]:
-        """Load golden records from QAC JSONL file"""
+        """Load golden records from QAC JSONL file
+        
+        Reads the 'id' field from each record. If the 'id' field is missing,
+        a UUID will be generated automatically with a warning logged.
+        """
         if not self.qac_path.exists():
             logger.error(f"QAC file not found: {self.qac_path}")
             return
@@ -53,6 +58,23 @@ class JSONLLoader(BaseLoader):
                 
                 try:
                     data = json.loads(line)
+                    
+                    # Check if id field is missing and log warning
+                    if 'id' not in data:
+                        generated_id = str(uuid.uuid4())
+                        data['id'] = generated_id
+                        logger.warning(
+                            f"Generated ID '{generated_id}' for record at line {line_num} "
+                            f"in {self.qac_path} (id field was missing)"
+                        )
+                    # Validate that id is non-empty string
+                    elif not isinstance(data['id'], str) or not data['id'].strip():
+                        logger.error(
+                            f"Invalid id field at line {line_num} in {self.qac_path}: "
+                            f"id must be a non-empty string"
+                        )
+                        continue
+                    
                     yield parse_golden_record(data)
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON in {self.qac_path} line {line_num}: {e}")
@@ -87,6 +109,8 @@ class JSONLLoader(BaseLoader):
                            file_path: Optional[Union[str, Path]] = None) -> Path:
         """Save golden records to JSONL file
         
+        The 'id' field is written as the first field in each JSON record.
+        
         Args:
             records: Iterator of GoldenRecord objects
             file_path: Optional custom file path
@@ -102,7 +126,9 @@ class JSONLLoader(BaseLoader):
         
         with open(file_path, 'w', encoding='utf-8') as f:
             for record in records:
+                # Write id as first field
                 data = {
+                    "id": record.id,
                     "user_input": record.user_input,
                     "reference": record.reference,
                     "reference_contexts": record.reference_contexts

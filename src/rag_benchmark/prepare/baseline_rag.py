@@ -28,27 +28,6 @@ class BaselineRAG(RAGInterface):
     - 支持自定义LLM
     - 简单的prompt模板
     
-    Example:
-        >>> from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-        >>> 
-        >>> # 创建BaselineRAG
-        >>> rag = BaselineRAG(
-        ...     embedding_model=OpenAIEmbeddings(),
-        ...     llm=ChatOpenAI(model="gpt-3.5-turbo"),
-        ...     config=RAGConfig(top_k=5)
-        ... )
-        >>> 
-        >>> # 索引文档
-        >>> corpus = ["doc1", "doc2", "doc3"]
-        >>> rag.index_documents(corpus)
-        >>> 
-        >>> # 检索
-        >>> result = rag.retrieve("query", top_k=3)
-        >>> print(result.contexts)
-        >>> 
-        >>> # 生成
-        >>> gen_result = rag.generate("query", result.contexts)
-        >>> print(gen_result.response)
     """
 
     def __init__(
@@ -135,7 +114,7 @@ class BaselineRAG(RAGInterface):
 
         logger.info(f"索引完成，共 {self.index.ntotal} 个文档")
 
-    def retrieve(self, query: str, top_k: Optional[int] = None) -> RetrievalResult:
+    async def retrieve(self, query: str, top_k: Optional[int] = None) -> RetrievalResult:
         """检索相关文档
         
         Args:
@@ -156,7 +135,7 @@ class BaselineRAG(RAGInterface):
             top_k = self.config.top_k
 
         # 生成query embedding
-        query_embedding = self.embedding_model.embed_query(query)
+        query_embedding = await self.embedding_model.aembed_query(query)
         query_array = np.array([query_embedding], dtype=np.float32)
 
         # 检索
@@ -172,7 +151,7 @@ class BaselineRAG(RAGInterface):
             scores=scores
         )
 
-    def generate(self, query: str, contexts: List[str]) -> GenerationResult:
+    async def generate(self, query: str, contexts: List[str]) -> GenerationResult:
         """基于上下文生成答案
         
         Args:
@@ -204,7 +183,7 @@ class BaselineRAG(RAGInterface):
 
         # 调用LLM生成
         try:
-            response = self.llm.invoke(prompt)
+            response = await self.llm.ainvoke(prompt)
             # 处理不同类型的响应
             if hasattr(response, 'content'):
                 answer = response.content
@@ -219,7 +198,7 @@ class BaselineRAG(RAGInterface):
                 response=f"生成答案时出错: {str(e)}"
             )
 
-    def batch_retrieve(
+    async def batch_retrieve(
             self, queries: List[str], top_k: Optional[int] = None
     ) -> List[RetrievalResult]:
         """批量检索（优化版本）
@@ -233,11 +212,6 @@ class BaselineRAG(RAGInterface):
         Returns:
             每个查询对应的RetrievalResult列表
             
-        Example:
-            >>> queries = ["query1", "query2", "query3"]
-            >>> results = rag.batch_retrieve(queries, top_k=3)
-            >>> for result in results:
-            ...     print(result.contexts)
         """
         if self.index is None:
             logger.warning("索引未初始化，返回空结果")
@@ -251,7 +225,7 @@ class BaselineRAG(RAGInterface):
 
         # 批量生成query embeddings（一次性生成所有查询的embeddings）
         logger.debug(f"批量生成 {len(queries)} 个查询的embeddings...")
-        query_embeddings = self.embedding_model.embed_documents(queries)
+        query_embeddings = await self.embedding_model.aembed_documents(queries)
         query_array = np.array(query_embeddings, dtype=np.float32)
 
         # 批量检索（FAISS支持批量搜索）
@@ -267,7 +241,7 @@ class BaselineRAG(RAGInterface):
         logger.debug(f"批量检索完成，共 {len(results)} 个结果")
         return results
 
-    def batch_generate(
+    async def batch_generate(
             self, queries: List[str], contexts_list: List[List[str]]
     ) -> List[GenerationResult]:
         """批量生成（优化版本）
@@ -281,12 +255,6 @@ class BaselineRAG(RAGInterface):
         Returns:
             每个查询对应的GenerationResult列表
             
-        Example:
-            >>> queries = ["query1", "query2"]
-            >>> contexts_list = [["ctx1", "ctx2"], ["ctx3", "ctx4"]]
-            >>> results = rag.batch_generate(queries, contexts_list)
-            >>> for result in results:
-            ...     print(result.response)
         """
         if self.llm is None:
             raise RuntimeError("LLM模型未设置")
@@ -316,7 +284,7 @@ class BaselineRAG(RAGInterface):
 
         try:
             # 使用batch方法批量调用
-            responses = self.llm.batch(prompts)
+            responses = await self.llm.abatch(prompts)
 
             # 处理响应
             results = []
@@ -337,30 +305,6 @@ class BaselineRAG(RAGInterface):
                 response=f"生成答案时出错: {str(e)}"
             ) for _ in queries]
 
-    def query(self, query: str, top_k: Optional[int] = None) -> dict:
-        """端到端查询（检索+生成）
-        
-        Args:
-            query: 用户问题
-            top_k: 检索top-k个文档
-            
-        Returns:
-            包含contexts、answer和scores的字典
-            
-        Example:
-            >>> result = rag.query("What is Python?")
-            >>> print(result["answer"])
-            >>> print(result["contexts"])
-        """
-        retrieval_result = self.retrieve(query, top_k)
-        generation_result = self.generate(query, retrieval_result.contexts)
-
-        return {
-            "query": query,
-            "contexts": retrieval_result.contexts,
-            "answer": generation_result.response,
-            "scores": retrieval_result.scores
-        }
 
     def save_to_disk(self, save_path: Path) -> None:
         """Save index data to specified path
@@ -374,9 +318,6 @@ class BaselineRAG(RAGInterface):
         Raises:
             RuntimeError: If persistence fails or RAG has no indexed data
             
-        Example:
-            >>> rag.index_documents(["doc1", "doc2", "doc3"])
-            >>> rag.save_to_disk(Path("data/indices/my_rag"))
         """
         from ..persistence import save_index_data
         
@@ -399,11 +340,6 @@ class BaselineRAG(RAGInterface):
         Returns:
             True if loading succeeded, False otherwise
             
-        Example:
-            >>> rag = BaselineRAG(embedding_model=embeddings, llm=llm)
-            >>> success = rag.load_from_disk(Path("data/indices/my_rag"))
-            >>> if success:
-            ...     result = rag.query("What is Python?")
         """
         from ..persistence import load_index_data
         
@@ -428,8 +364,6 @@ class BaselineRAG(RAGInterface):
         Args:
             delete_path: Directory path where index data is stored
             
-        Example:
-            >>> rag.delete_from_disk(Path("data/indices/my_rag"))
         """
         from ..persistence import delete_index_data
         
@@ -446,11 +380,6 @@ class BaselineRAG(RAGInterface):
         Returns:
             True if the instance has a FAISS index and documents, False otherwise
             
-        Example:
-            >>> rag = BaselineRAG(embedding_model=embeddings, llm=llm)
-            >>> print(rag.has_index())  # False
-            >>> rag.index_documents(["doc1", "doc2"])
-            >>> print(rag.has_index())  # True
         """
         return self.index is not None and len(self.documents) > 0
 
@@ -464,11 +393,6 @@ class BaselineRAG(RAGInterface):
             - embedding_dimension: Dimension of embeddings (if indexed)
             - index_type: Type of FAISS index (if indexed)
             
-        Example:
-            >>> rag.index_documents(["doc1", "doc2", "doc3"])
-            >>> stats = rag.get_index_stats()
-            >>> print(stats["document_count"])  # 3
-            >>> print(stats["has_index"])  # True
         """
         if not self.has_index():
             return {

@@ -2,6 +2,7 @@
 
 FastAPI服务，暴露RAG Benchmark的核心功能
 """
+import asyncio
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,12 +12,18 @@ import logging
 from datetime import datetime
 import uuid
 import json
+import math
 from pathlib import Path
 
+from ragas.embeddings.base import LangchainEmbeddingsWrapper
+from ragas.llms.base import LangchainLLMWrapper
+from ragas.cache import DiskCacheBackend
 from rag_benchmark.datasets import GoldenDataset
-from rag_benchmark.prepare import prepare_experiment_dataset, BaselineRAG, RAGConfig
+from rag_benchmark.prepare import prepare_experiment_dataset, BaselineRAG, RAGConfig, RAGInterface
 from rag_benchmark.evaluate import evaluate_e2e, evaluate_retrieval, evaluate_generation
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from rag_benchmark.api.checkpoint_manager import CheckpointManager
+from rag_benchmark.api.sample_selector import SampleSelector
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -46,10 +53,38 @@ TASKS_DIR = Path("data/tasks")
 TASKS_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_FILE = Path("data/models.json")
 MODELS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+
+cache = DiskCacheBackend()
+
+def sanitize_float_values(obj: Any) -> Any:
+    """Sanitize float values to be JSON compliant
+    
+    Converts inf, -inf, and nan to None to prevent JSON serialization errors.
+    
+    Args:
+        obj: Object to sanitize (can be dict, list, float, or any other type)
+        
+    Returns:
+        Sanitized object with invalid floats replaced by None
+    """
+    if isinstance(obj, dict):
+        return {key: sanitize_float_values(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_float_values(item) for item in obj]
+    elif isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    else:
+        return obj
 RAGS_DIR = Path("data/rags")
 RAGS_DIR.mkdir(parents=True, exist_ok=True)
 INDICES_DIR = Path("data/indices")
 INDICES_DIR.mkdir(parents=True, exist_ok=True)
+
+# Initialize CheckpointManager
+checkpoint_manager = CheckpointManager(TASKS_DIR)
 
 
 # ============ Pydantic Models ============
@@ -111,13 +146,41 @@ class QueryRequest(BaseModel):
     top_k: Optional[int] = None
 
 
+class SampleSelection(BaseModel):
+    """Sample selection strategy for evaluation
+    
+    Attributes:
+        strategy: Selection strategy - "specific_ids", "random", or "all"
+        sample_ids: List of specific sample IDs to evaluate (for "specific_ids" strategy)
+        sample_size: Number of random samples to select (for "random" strategy)
+        random_seed: Random seed for reproducible random sampling (optional)
+    """
+    strategy: str = Field(..., description="Selection strategy: 'specific_ids', 'random', or 'all'")
+    sample_ids: Optional[List[str]] = Field(None, description="Specific sample IDs to evaluate")
+    sample_size: Optional[int] = Field(None, ge=1, description="Number of random samples to select")
+    random_seed: Optional[int] = Field(None, description="Random seed for reproducible sampling")
+
+
 class EvaluateRequest(BaseModel):
+    """Evaluation request with sample selection support
+    
+    Attributes:
+        dataset_name: Name of the dataset to evaluate
+        subset: Optional dataset subset
+        rag_name: Name of the RAG instance to evaluate
+        eval_type: Type of evaluation - "e2e", "retrieval", or "generation"
+        model_info: Model configuration for evaluation
+        sample_selection: Sample selection strategy (optional)
+    """
     dataset_name: str
     subset: Optional[str] = None
     rag_name: str
     eval_type: str = "e2e"  # e2e, retrieval, generation
-    sample_size: Optional[int] = None
     model_info: ModelConfig  # 评测时的模型配置
+    sample_selection: Optional[SampleSelection] = Field(
+        None,
+        description="Sample selection strategy. If not provided, evaluates all samples or uses sample_size for backward compatibility."
+    )
 
 
 class IndexStatus(BaseModel):
@@ -130,6 +193,40 @@ class IndexStatus(BaseModel):
     total_size_bytes: Optional[int] = None
 
 
+class SampleInfo(BaseModel):
+    """Sample information for evaluation tasks
+    
+    Attributes:
+        selection_strategy: Strategy used for sample selection ("specific_ids", "random", "all")
+        total_samples: Total number of samples in the dataset
+        selected_samples: Number of samples selected for evaluation
+        sample_ids: List of sample IDs selected (optional, for specific_ids strategy)
+        completed_samples: Number of samples that completed evaluation successfully
+        failed_samples: Number of samples that failed during evaluation
+    """
+    selection_strategy: str = Field(..., description="Sample selection strategy used")
+    total_samples: int = Field(..., ge=0, description="Total samples in dataset")
+    selected_samples: int = Field(..., ge=0, description="Number of samples selected")
+    sample_ids: Optional[List[str]] = Field(None, description="List of selected sample IDs")
+    completed_samples: int = Field(default=0, ge=0, description="Samples completed successfully")
+    failed_samples: int = Field(default=0, ge=0, description="Samples that failed")
+
+
+class CheckpointInfo(BaseModel):
+    """Checkpoint progress information for evaluation tasks
+    
+    Attributes:
+        has_checkpoint: Whether checkpoint data exists for this task
+        completed_stages: List of stages that have been completed
+        current_stage: Current stage being executed (if running)
+        last_checkpoint_at: Timestamp of last checkpoint save
+    """
+    has_checkpoint: bool = Field(..., description="Whether checkpoint data exists")
+    completed_stages: List[str] = Field(default_factory=list, description="List of completed stages")
+    current_stage: Optional[str] = Field(None, description="Current stage being executed")
+    last_checkpoint_at: Optional[str] = Field(None, description="Timestamp of last checkpoint")
+
+
 class TaskStatus(BaseModel):
     task_id: str
     status: str  # pending, running, completed, failed
@@ -139,23 +236,32 @@ class TaskStatus(BaseModel):
     error: Optional[str] = None
     created_at: str
     updated_at: str
+    sample_info: Optional[SampleInfo] = Field(None, description="Sample tracking information")
+    checkpoint_info: Optional[CheckpointInfo] = Field(None, description="Checkpoint progress information")
 
 
 # ============ Helper Functions ============
 
 def save_task_status(task_id: str):
-    """保存任务状态到磁盘"""
-    task_file = TASKS_DIR / f"{task_id}.json"
-    with open(task_file, 'w') as f:
-        json.dump(tasks_status[task_id], f, indent=2)
+    """保存任务状态到磁盘（使用目录结构）"""
+    task_dir = TASKS_DIR / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+    
+    status_file = task_dir / "status.json"
+    # Sanitize the status data before saving to prevent JSON serialization errors
+    sanitized_status = sanitize_float_values(tasks_status[task_id])
+    with open(status_file, 'w') as f:
+        json.dump(sanitized_status, f, indent=2)
 
 
 def load_task_status(task_id: str) -> Optional[Dict]:
-    """从磁盘加载任务状态"""
-    task_file = TASKS_DIR / f"{task_id}.json"
-    if task_file.exists():
-        with open(task_file, 'r') as f:
+    """从磁盘加载任务状态（从目录结构）"""
+    task_dir = TASKS_DIR / task_id
+    status_file = task_dir / "status.json"
+    if status_file.exists():
+        with open(status_file, 'r') as f:
             return json.load(f)
+    
     return None
 
 
@@ -434,24 +540,99 @@ async def get_dataset_stats(dataset_info: DatasetInfo):
 
 
 @app.post("/datasets/sample")
-async def sample_dataset(dataset_info: DatasetInfo, n: int = 5):
-    """获取数据集样本"""
+async def sample_dataset(
+    dataset_info: DatasetInfo,
+    page: int = 1,
+    page_size: int = 20,
+    search: Optional[str] = None
+):
+    """获取数据集样本（支持分页和搜索）
+    
+    Args:
+        dataset_info: Dataset name and subset
+        page: Page number (1-indexed, default: 1)
+        page_size: Number of samples per page (default: 20, allowed: 10, 20, 50, 100)
+        search: Optional search query for user_input field
+        
+    Returns:
+        {
+            "dataset_name": str,
+            "subset": str,
+            "total_count": int,
+            "page": int,
+            "page_size": int,
+            "total_pages": int,
+            "samples": List[dict]
+        }
+    """
     try:
+        # Validate pagination parameters
+        if page < 1:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Invalid pagination parameters",
+                    "details": "page must be >= 1",
+                    "action": "Please provide a valid page number"
+                }
+            )
+        
+        allowed_page_sizes = [10, 20, 50, 100]
+        if page_size not in allowed_page_sizes:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Invalid pagination parameters",
+                    "details": f"page_size must be one of {allowed_page_sizes}",
+                    "action": f"Please use one of the allowed page sizes: {allowed_page_sizes}"
+                }
+            )
+        
+        # Load dataset
         dataset = GoldenDataset(dataset_info.name, dataset_info.subset)
-        samples = dataset.head(n)
+        
+        # Apply search filter if provided
+        if search:
+            dataset = dataset.search(search, case_sensitive=False)
+        
+        # Get paginated samples
+        samples, total_count = dataset.paginate(page, page_size)
+        
+        # Calculate total pages
+        total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
+        
+        # Validate page number is within range (after getting total_count)
+        if total_count > 0 and page > total_pages:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Invalid pagination parameters",
+                    "details": f"page {page} exceeds total pages {total_pages}",
+                    "action": f"Please provide a page number between 1 and {total_pages}",
+                    "total_pages": total_pages
+                }
+            )
+        
         return {
             "dataset_name": dataset_info.name,
             "subset": dataset_info.subset,
-            "count": len(samples),
+            "total_count": total_count,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
             "samples": [
                 {
+                    "id": s.id,
                     "user_input": s.user_input,
                     "reference": s.reference,
-                    "reference_contexts": s.reference_contexts[:2]
+                    "reference_contexts": s.reference_contexts[:2],
+                    "reference_context_ids": s.reference_context_ids
                 }
                 for s in samples
             ]
         }
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
     except Exception as e:
         logger.error(f"获取数据集样本失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -585,42 +766,187 @@ async def get_rag_index_status(rag_name: str):
 
 
 @app.post("/datasets/corpus/preview")
-async def preview_corpus(dataset_info: DatasetInfo, limit: int = 100):
-    """预览数据集的corpus文档"""
+async def preview_corpus(
+    dataset_info: DatasetInfo,
+    page: int = 1,
+    page_size: int = 20
+):
+    """预览数据集的corpus文档（支持分页）
+    
+    Args:
+        dataset_info: Dataset name and subset
+        page: Page number (1-indexed, default: 1)
+        page_size: Number of documents per page (default: 20, allowed: 10, 20, 50, 100)
+        
+    Returns:
+        {
+            "dataset_name": str,
+            "subset": str,
+            "total_count": int,
+            "page": int,
+            "page_size": int,
+            "total_pages": int,
+            "documents": List[dict]
+        }
+    """
     try:
+        # Validate pagination parameters
+        if page < 1:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Invalid pagination parameters",
+                    "details": "page must be >= 1",
+                    "action": "Please provide a valid page number"
+                }
+            )
+        
+        allowed_page_sizes = [10, 20, 50, 100]
+        if page_size not in allowed_page_sizes:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Invalid pagination parameters",
+                    "details": f"page_size must be one of {allowed_page_sizes}",
+                    "action": f"Please use one of the allowed page sizes: {allowed_page_sizes}"
+                }
+            )
+        
+        # Load dataset
         dataset = GoldenDataset(dataset_info.name, dataset_info.subset)
         corpus_records = list(dataset.iter_corpus())
+        total_count = len(corpus_records)
         
-        if not corpus_records:
+        if total_count == 0:
             return {
                 "dataset_name": dataset_info.name,
                 "subset": dataset_info.subset,
                 "total_count": 0,
-                "preview_count": 0,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": 0,
                 "documents": []
             }
         
-        # 限制预览数量
-        preview_records = corpus_records[:limit]
+        # Calculate total pages
+        total_pages = (total_count + page_size - 1) // page_size
+        
+        # Validate page number is within range
+        if page > total_pages:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Invalid pagination parameters",
+                    "details": f"page {page} exceeds total pages {total_pages}",
+                    "action": f"Please provide a page number between 1 and {total_pages}",
+                    "total_pages": total_pages
+                }
+            )
+        
+        # Calculate pagination indices
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        
+        # Get paginated records
+        paginated_records = corpus_records[start_idx:end_idx]
         
         documents = [
             {
                 "id": record.reference_context_id,
+                "doc_id": record.reference_context_id,  # Alias for frontend compatibility
                 "content": record.reference_context,
-                "length": len(record.reference_context)
+                "title": record.title,
+                "metadata": record.metadata,
+                "length": len(record.reference_context)  # For backward compatibility
             }
-            for record in preview_records
+            for record in paginated_records
         ]
         
         return {
             "dataset_name": dataset_info.name,
             "subset": dataset_info.subset,
-            "total_count": len(corpus_records),
-            "preview_count": len(documents),
+            "total_count": total_count,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
             "documents": documents
         }
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
     except Exception as e:
         logger.error(f"预览corpus失败: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class CorpusByIdRequest(BaseModel):
+    """Request model for getting corpus documents by IDs"""
+    dataset_info: DatasetInfo
+    document_ids: List[str]
+
+
+@app.post("/datasets/corpus/by-id")
+async def get_corpus_by_id(request: CorpusByIdRequest):
+    """获取指定ID的corpus文档
+    
+    Args:
+        request: Request containing dataset_info and document_ids
+        
+    Returns:
+        {
+            "dataset_name": str,
+            "subset": str,
+            "documents": List[dict]
+        }
+    """
+    try:
+        # Validate document_ids
+        if not request.document_ids:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Invalid request parameters",
+                    "details": "document_ids cannot be empty",
+                    "action": "Please provide at least one document ID"
+                }
+            )
+        
+        # Load dataset
+        dataset = GoldenDataset(request.dataset_info.name, request.dataset_info.subset)
+        
+        # Get corpus documents by IDs
+        corpus_records = dataset.get_corpus_by_ids(request.document_ids)
+        
+        # Check if all requested IDs were found
+        found_ids = {record.reference_context_id for record in corpus_records}
+        missing_ids = [doc_id for doc_id in request.document_ids if doc_id not in found_ids]
+        
+        if missing_ids:
+            logger.warning(f"Some document IDs not found: {missing_ids}")
+        
+        documents = [
+            {
+                "id": record.reference_context_id,
+                "doc_id": record.reference_context_id,  # Alias for frontend compatibility
+                "content": record.reference_context,
+                "title": record.title,
+                "metadata": record.metadata,
+                "length": len(record.reference_context)  # For backward compatibility
+            }
+            for record in corpus_records
+        ]
+        
+        return {
+            "dataset_name": request.dataset_info.name,
+            "subset": request.dataset_info.subset,
+            "documents": documents,
+            "requested_count": len(request.document_ids),
+            "found_count": len(documents),
+            "missing_ids": missing_ids if missing_ids else None
+        }
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
+    except Exception as e:
+        logger.error(f"获取corpus文档失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -654,8 +980,22 @@ async def index_documents(request: IndexDocumentsWithSelectionRequest):
         if not corpus_records:
             raise ValueError(f"数据集 '{request.dataset_name}' 没有corpus数据")
         
-        # 如果指定了document_ids，只索引选中的文档
-        if request.document_ids:
+        # 如果指定了document_ids，验证并只索引选中的文档
+        if request.document_ids is not None:
+            # Validate that all document IDs exist
+            valid_doc_ids = {record.reference_context_id for record in corpus_records}
+            invalid_doc_ids = [doc_id for doc_id in request.document_ids if doc_id not in valid_doc_ids]
+            
+            if invalid_doc_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Invalid document IDs provided",
+                        "details": f"The following document IDs do not exist in the corpus: {invalid_doc_ids}",
+                        "action": "Please verify document IDs and try again. Use POST /datasets/corpus/preview to see valid document IDs."
+                    }
+                )
+            
             selected_records = [
                 record for record in corpus_records 
                 if record.reference_context_id in request.document_ids
@@ -687,6 +1027,8 @@ async def index_documents(request: IndexDocumentsWithSelectionRequest):
             "document_count": len(documents),
             "total_corpus_count": len(corpus_records)
         }
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
     except Exception as e:
         logger.error(f"索引文档失败: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
@@ -699,14 +1041,14 @@ async def query_rag(request: QueryRequest):
         raise HTTPException(status_code=404, detail=f"RAG实例 '{request.rag_name}' 不存在")
     
     try:
-        rag = rag_instances[request.rag_name]["rag"]
-        result = rag.query(request.query, request.top_k)
+        rag: RAGInterface = rag_instances[request.rag_name]["rag"]
+        retrieve_result, generate_result = await rag.retrieve_and_generate(request.query, request.top_k)
         
         return {
-            "query": result["query"],
-            "answer": result["answer"],
-            "contexts": result["contexts"],
-            "scores": result.get("scores", [])
+            "query": request.query,
+            "answer": generate_result.response,
+            "contexts": retrieve_result.contexts,
+            "scores": retrieve_result.scores
         }
     except Exception as e:
         logger.error(f"查询失败: {e}")
@@ -717,9 +1059,141 @@ async def query_rag(request: QueryRequest):
 
 @app.post("/evaluate/start")
 async def start_evaluation(request: EvaluateRequest, background_tasks: BackgroundTasks):
-    """启动评测任务（异步）"""
+    """启动评测任务（异步）
+    
+    Validates sample selection parameters before creating the task.
+    Returns immediate error for invalid sample IDs.
+    """
+    # Validate sample selection parameters before creating task
+    if request.sample_selection:
+        selection = request.sample_selection
+        
+        # Validate strategy
+        valid_strategies = ["specific_ids", "random", "all"]
+        if selection.strategy not in valid_strategies:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Invalid sample selection strategy",
+                    "details": f"Strategy '{selection.strategy}' is not valid. Must be one of: {valid_strategies}",
+                    "action": "Please use a valid strategy: 'specific_ids', 'random', or 'all'"
+                }
+            )
+        
+        # Validate specific_ids strategy
+        if selection.strategy == "specific_ids":
+            if not selection.sample_ids or len(selection.sample_ids) == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Invalid sample selection parameters",
+                        "details": "sample_ids is required and must not be empty for 'specific_ids' strategy",
+                        "action": "Please provide a list of sample IDs to evaluate"
+                    }
+                )
+            
+            # Load dataset to validate sample IDs
+            try:
+                dataset = GoldenDataset(request.dataset_name, request.subset)
+                invalid_ids = SampleSelector.validate_sample_ids(dataset, selection.sample_ids)
+                
+                if invalid_ids:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "Invalid sample IDs provided",
+                            "details": f"The following sample IDs do not exist in the dataset: {invalid_ids}",
+                            "action": "Please verify sample IDs and try again. Use GET /datasets/sample to see valid sample IDs."
+                        }
+                    )
+            except HTTPException:
+                raise  # Re-raise HTTP exceptions
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Failed to validate sample IDs",
+                        "details": str(e),
+                        "action": "Please check that the dataset name and subset are correct"
+                    }
+                )
+        
+        # Validate random strategy
+        elif selection.strategy == "random":
+            if not selection.sample_size or selection.sample_size <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Invalid sample selection parameters",
+                        "details": "sample_size is required and must be greater than 0 for 'random' strategy",
+                        "action": "Please provide a valid sample_size"
+                    }
+                )
+            
+            # Validate that sample_size doesn't exceed dataset size
+            try:
+                dataset = GoldenDataset(request.dataset_name, request.subset)
+                total_samples = dataset.count()
+                
+                if selection.sample_size > total_samples:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "Invalid sample selection parameters",
+                            "details": f"sample_size ({selection.sample_size}) exceeds total dataset size ({total_samples})",
+                            "action": f"Please provide a sample_size <= {total_samples}"
+                        }
+                    )
+            except HTTPException:
+                raise  # Re-raise HTTP exceptions
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Failed to validate sample_size",
+                        "details": str(e),
+                        "action": "Please check that the dataset name and subset are correct"
+                    }
+                )
+        
+        # Validate all strategy (no additional parameters needed)
+        elif selection.strategy == "all":
+            # No additional validation needed for "all" strategy
+            pass
+    
     task_id = str(uuid.uuid4())
     
+    # Create task directory
+    task_dir = TASKS_DIR / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save task configuration to config.json
+    config_data = {
+        "dataset_name": request.dataset_name,
+        "subset": request.subset,
+        "rag_name": request.rag_name,
+        "eval_type": request.eval_type,
+        "model_info": request.model_info.model_dump(),
+        "sample_selection": request.sample_selection.model_dump() if request.sample_selection else None
+    }
+    config_file = task_dir / "config.json"
+    with open(config_file, 'w') as f:
+        json.dump(config_data, f, indent=2)
+    
+    # Initialize sample_info (will be populated during execution)
+    sample_info = None
+    if request.sample_selection:
+        # Pre-initialize with known information
+        sample_info = {
+            "selection_strategy": request.sample_selection.strategy,
+            "total_samples": 0,  # Will be updated during execution
+            "selected_samples": 0,  # Will be updated during execution
+            "sample_ids": request.sample_selection.sample_ids if request.sample_selection.strategy == "specific_ids" else None,
+            "completed_samples": 0,
+            "failed_samples": 0
+        }
+    
+    # Initialize task status
     tasks_status[task_id] = {
         "task_id": task_id,
         "status": "pending",
@@ -729,19 +1203,16 @@ async def start_evaluation(request: EvaluateRequest, background_tasks: Backgroun
         "error": None,
         "created_at": datetime.now().isoformat(),
         "updated_at": datetime.now().isoformat(),
-        "request": {
-            "dataset_name": request.dataset_name,
-            "subset": request.subset,
-            "rag_name": request.rag_name,
-            "eval_type": request.eval_type,
-            "sample_size": request.sample_size,
-            "model_info": request.model_info.model_dump()
-        }
+        "sample_info": sample_info
     }
     save_task_status(task_id)
-    
+
+    def run_evaluation_task_sync(task_id: str, request: EvaluateRequest):
+        """简化版：直接用asyncio.run执行异步任务（自动管理事件循环）"""
+        asyncio.run(run_evaluation_task(task_id, request))
+
     background_tasks.add_task(
-        run_evaluation_task,
+        run_evaluation_task_sync,
         task_id,
         request
     )
@@ -753,7 +1224,7 @@ async def start_evaluation(request: EvaluateRequest, background_tasks: Backgroun
     }
 
 
-def run_evaluation_task(task_id: str, request: EvaluateRequest):
+async def run_evaluation_task(task_id: str, request: EvaluateRequest):
     """运行评测任务（支持断点续传）"""
     try:
         # 检查是否有已保存的状态
@@ -762,83 +1233,229 @@ def run_evaluation_task(task_id: str, request: EvaluateRequest):
             logger.info(f"任务 {task_id} 已完成，跳过")
             return
         
-        # 阶段1: 加载数据集
-        update_task_status(
-            task_id,
-            status="running",
-            progress=0.1,
-            current_stage="加载数据集"
-        )
+        # Load checkpoint data if exists
+        checkpoint = checkpoint_manager.load_checkpoint(task_id)
+        completed_stages = checkpoint.get("completed_stages", []) if checkpoint else []
         
-        dataset = GoldenDataset(request.dataset_name, request.subset)
-        if request.sample_size:
-            # 使用create_subset方法创建子数据集
-            dataset = dataset.create_subset(request.sample_size)
+        # Handle corrupted checkpoint data
+        if checkpoint and not isinstance(completed_stages, list):
+            logger.warning(f"任务 {task_id}: 检查点数据损坏，从头开始")
+            checkpoint_manager.clear_checkpoints(task_id)
+            completed_stages = []
         
-        update_task_status(task_id, progress=0.2, current_stage="数据集加载完成")
+        logger.info(f"任务 {task_id}: 已完成阶段: {completed_stages}")
+        
+        # 阶段1: 加载数据集和样本选择
+        if "load_dataset" not in completed_stages:
+            update_task_status(
+                task_id,
+                status="running",
+                progress=0.1,
+                current_stage="加载数据集"
+            )
+            
+            # Load full dataset
+            dataset = GoldenDataset(request.dataset_name, request.subset)
+            total_samples = dataset.count()
+            
+            # Determine selection strategy
+            if request.sample_selection:
+                selection = request.sample_selection
+                selection_strategy = selection.strategy
+            else:
+                # Backward compatibility: no sample_selection means select all
+                selection_strategy = "all"
+                selection = None
+            
+            # Apply sample selection using SampleSelector
+            # Note: Validation already done in start_evaluation endpoint
+            if selection and selection.strategy == "specific_ids":
+                dataset = SampleSelector.select_by_ids(dataset, selection.sample_ids)
+                selected_sample_ids = selection.sample_ids
+                logger.info(f"任务 {task_id}: 选择了 {len(selection.sample_ids)} 个特定样本")
+                
+            elif selection and selection.strategy == "random":
+                dataset = SampleSelector.select_random(
+                    dataset, 
+                    selection.sample_size,
+                    selection.random_seed
+                )
+                selected_sample_ids = None  # Random selection doesn't track specific IDs
+                logger.info(f"任务 {task_id}: 随机选择了 {selection.sample_size} 个样本")
+                
+            elif selection and selection.strategy == "all":
+                dataset = SampleSelector.select_all(dataset)
+                selected_sample_ids = None  # All samples, no need to track IDs
+                logger.info(f"任务 {task_id}: 选择了所有 {total_samples} 个样本")
+                
+            else:
+                # Backward compatibility: no sample_selection means select all
+                dataset = SampleSelector.select_all(dataset)
+                selected_sample_ids = None
+                logger.info(f"任务 {task_id}: 未指定样本选择策略，使用所有样本")
+            
+            selected_samples = dataset.count()
+            
+            # Initialize sample_info in task status
+            sample_info = {
+                "selection_strategy": selection_strategy,
+                "total_samples": total_samples,
+                "selected_samples": selected_samples,
+                "sample_ids": selected_sample_ids,
+                "completed_samples": 0,
+                "failed_samples": 0
+            }
+            
+            # Persist selected dataset to disk
+            try:
+                checkpoint_manager.save_golden_dataset(task_id, dataset)
+            except IOError as e:
+                logger.warning(f"任务 {task_id}: 持久化数据集失败: {e}")
+                # Continue - we can still complete the task
+            
+            # Save checkpoint
+            checkpoint_manager.save_checkpoint(
+                task_id,
+                "load_dataset",
+                {
+                    "dataset_name": request.dataset_name,
+                    "subset": request.subset,
+                    "total_samples": total_samples,
+                    "selected_samples": selected_samples,
+                    "selection_strategy": selection_strategy,
+                    "sample_ids": selected_sample_ids
+                }
+            )
+            
+            update_task_status(
+                task_id, 
+                progress=0.2, 
+                current_stage="数据集加载完成",
+                sample_info=sample_info
+            )
+        else:
+            logger.info(f"任务 {task_id}: 跳过阶段 'load_dataset'（已完成）")
+            # Load dataset directly from disk
+            dataset = checkpoint_manager.load_golden_dataset(task_id)
+            
+            # Restore sample_info from checkpoint
+            checkpoint_data = checkpoint.get("stage_data", {}).get("load_dataset", {})
+            sample_info = {
+                "selection_strategy": checkpoint_data.get("selection_strategy", "all"),
+                "total_samples": checkpoint_data.get("total_samples", dataset.count()),
+                "selected_samples": checkpoint_data.get("selected_samples", dataset.count()),
+                "sample_ids": checkpoint_data.get("sample_ids"),
+                "completed_samples": 0,
+                "failed_samples": 0
+            }
+            
+            update_task_status(
+                task_id, 
+                progress=0.2, 
+                current_stage="数据集加载完成（从检查点恢复）",
+                sample_info=sample_info
+            )
         
         # 阶段2: 准备实验数据集
-        update_task_status(task_id, progress=0.3, current_stage="准备实验数据集")
-        
-        # 使用评测请求中的模型配置创建临时RAG
-        if request.rag_name in rag_instances:
-            rag = rag_instances[request.rag_name]["rag"]
-        else:
-            # 使用请求中的模型配置创建临时RAG
-            rag_config = RAGConfig()
-            llm = get_model_client(request.model_info.llm_model_id)
-            embedding = get_model_client(request.model_info.embedding_model_id)
+        if "prepare_experiment" not in completed_stages:
+            update_task_status(task_id, progress=0.3, current_stage="准备实验数据集")
             
-            rag = BaselineRAG(
-                embedding_model=embedding,
-                llm=llm,
-                config=rag_config
+            # Get or create RAG instance
+            if request.rag_name in rag_instances:
+                rag = rag_instances[request.rag_name]["rag"]
+            else:
+                # 使用请求中的模型配置创建临时RAG
+                rag_config = RAGConfig()
+                llm = get_model_client(request.model_info.llm_model_id)
+                embedding = get_model_client(request.model_info.embedding_model_id)
+                
+                rag = BaselineRAG(
+                    embedding_model=embedding,
+                    llm=llm,
+                    config=rag_config
+                )
+            
+            exp_ds = await prepare_experiment_dataset(dataset, rag)
+            
+            # Persist experiment dataset to disk
+            try:
+                checkpoint_manager.save_experiment_dataset(task_id, exp_ds)
+            except IOError as e:
+                logger.warning(f"任务 {task_id}: 持久化实验数据集失败: {e}")
+                # Continue - we can still complete the task
+            
+            # Save checkpoint
+            checkpoint_manager.save_checkpoint(
+                task_id,
+                "prepare_experiment",
+                {
+                    "experiment_dataset_saved": True,
+                    "experiment_size": len(exp_ds.samples)
+                }
             )
-        
-        exp_ds = prepare_experiment_dataset(dataset, rag)
-        update_task_status(task_id, progress=0.5, current_stage="实验数据集准备完成")
+            
+            update_task_status(task_id, progress=0.5, current_stage="实验数据集准备完成")
+        else:
+            logger.info(f"任务 {task_id}: 跳过阶段 'prepare_experiment'（已完成）")
+            # Load experiment dataset directly from disk
+            exp_ds = checkpoint_manager.load_experiment_dataset(task_id)
+            update_task_status(task_id, progress=0.5, current_stage="实验数据集准备完成（从检查点恢复）")
         
         # 阶段3: 运行评测
-        update_task_status(task_id, progress=0.6, current_stage=f"运行{request.eval_type}评测")
-        
-        # 使用评测请求中的模型配置
-        eval_llm = get_model_client(request.model_info.llm_model_id)
-        eval_embeddings = get_model_client(request.model_info.embedding_model_id)
-        
-        if request.eval_type == "e2e":
-            result = evaluate_e2e(
-                exp_ds,
-                experiment_name=f"{request.rag_name}_e2e",
-                llm=eval_llm,
-                embeddings=eval_embeddings
+        if "run_evaluation" not in completed_stages:
+            update_task_status(task_id, progress=0.6, current_stage=f"运行{request.eval_type}评测")
+            
+            # 使用评测请求中的模型配置
+            llm = get_model_client(request.model_info.llm_model_id)
+            embeddings = get_model_client(request.model_info.embedding_model_id)
+            eval_llm = LangchainLLMWrapper(langchain_llm=llm, cache=cache)
+            eval_embeddings = LangchainEmbeddingsWrapper(embeddings=embeddings, cache=cache)
+
+            if request.eval_type == "e2e":
+                result = await evaluate_e2e(
+                    exp_ds,
+                    experiment_name=f"{request.rag_name}_e2e",
+                    llm=eval_llm,
+                    embeddings=eval_embeddings
+                )
+            elif request.eval_type == "retrieval":
+                result = await evaluate_retrieval(
+                    exp_ds,
+                    experiment_name=f"{request.rag_name}_retrieval",
+                    llm=eval_llm,
+                    embeddings=eval_embeddings
+                )
+            elif request.eval_type == "generation":
+                result = await evaluate_generation(
+                    exp_ds,
+                    experiment_name=f"{request.rag_name}_generation",
+                    llm=eval_llm,
+                    embeddings=eval_embeddings
+                )
+            else:
+                raise ValueError(f"不支持的评测类型: {request.eval_type}")
+            
+            # Save checkpoint with evaluation result
+            checkpoint_manager.save_checkpoint(
+                task_id,
+                "run_evaluation",
+                {
+                    "eval_type": request.eval_type,
+                    "evaluation_completed": True
+                }
             )
-        elif request.eval_type == "retrieval":
-            result = evaluate_retrieval(
-                exp_ds,
-                experiment_name=f"{request.rag_name}_retrieval",
-                llm=eval_llm,
-                embeddings=eval_embeddings
-            )
-        elif request.eval_type == "generation":
-            result = evaluate_generation(
-                exp_ds,
-                experiment_name=f"{request.rag_name}_generation",
-                llm=eval_llm,
-                embeddings=eval_embeddings
-            )
+            
+            update_task_status(task_id, progress=0.8, current_stage="评测完成，处理结果")
         else:
-            raise ValueError(f"不支持的评测类型: {request.eval_type}")
-        
-        update_task_status(task_id, progress=0.8, current_stage="评测完成，处理结果")
+            logger.info(f"任务 {task_id}: 跳过阶段 'run_evaluation'（已完成）")
+            # This shouldn't happen in normal flow, but handle it
+            raise ValueError("Cannot resume from completed evaluation - result not persisted")
         
         # 阶段4: 处理结果
-        # ragas的EvaluationResult内部已经计算好了指标平均值
-        # result._repr_dict 包含所有指标的平均值
-        # result.scores 包含每个样本的详细评测结果
         logger.info(f"任务 {task_id}: 开始处理评测结果")
         
         try:
-            # 方法1: 使用ragas内部计算好的指标平均值
+            # 使用ragas内部计算好的指标平均值
             metrics = result._repr_dict
             # 获取详细结果（DataFrame格式，用于前端展开显示）
             df = result.to_pandas()
@@ -847,16 +1464,62 @@ def run_evaluation_task(task_id: str, request: EvaluateRequest):
             # 将DataFrame转换为记录列表（用于前端表格显示）
             detailed_results = df.to_dict('records')
             
+            # Count completed and failed samples
+            # In ragas with raise_exceptions=False (default), failed samples return np.nan for all metrics
+            # A sample is considered failed only if ALL metric values are NaN/None
+            completed_samples = 0
+            failed_samples = 0
+            
+            # Get metric names from the evaluation result
+            # These are the actual metrics computed by ragas for this evaluation
+            metric_names = set(metrics.keys()) if metrics else set()
+            
+            for record in detailed_results:
+                # Extract metric values using the actual metric names from the evaluation
+                # This is more robust than hardcoding excluded columns
+                metric_values = []
+                for key, value in record.items():
+                    if key in metric_names:
+                        metric_values.append(value)
+                
+                # Check if all metrics are NaN/None (complete failure)
+                # or if at least one metric has a valid value (partial or complete success)
+                if not metric_values:
+                    # No metrics found, consider as failed
+                    failed_samples += 1
+                else:
+                    all_invalid = all(
+                        value is None or (isinstance(value, float) and math.isnan(value))
+                        for value in metric_values
+                    )
+                    if all_invalid:
+                        failed_samples += 1
+                    else:
+                        completed_samples += 1
+            
             logger.info(f"任务 {task_id}: 成功提取 {len(metrics)} 个指标")
-            logger.info(f"任务 {task_id}: 样本数: {sample_count}")
+            logger.info(f"任务 {task_id}: 样本数: {sample_count}, 成功: {completed_samples}, 失败: {failed_samples}")
             
         except Exception as e:
             logger.error(f"任务 {task_id}: 提取指标失败: {e}", exc_info=True)
             metrics = {}
             detailed_results = []
             sample_count = 0
+            completed_samples = 0
+            failed_samples = 0
         
         logger.info(f"任务 {task_id}: 最终指标: {metrics}")
+        
+        # Update sample_info with final counts
+        current_status = tasks_status.get(task_id, {})
+        sample_info = current_status.get("sample_info", {})
+        if sample_info:
+            sample_info["completed_samples"] = completed_samples
+            sample_info["failed_samples"] = failed_samples
+        
+        # Sanitize metrics and detailed_results to remove invalid float values
+        sanitized_metrics = sanitize_float_values(metrics)
+        sanitized_detailed_results = sanitize_float_values(detailed_results)
         
         update_task_status(
             task_id,
@@ -864,12 +1527,13 @@ def run_evaluation_task(task_id: str, request: EvaluateRequest):
             progress=1.0,
             current_stage="完成",
             result={
-                "metrics": metrics,  # 指标平均值字典
-                "detailed_results": detailed_results,  # 每个样本的详细结果
+                "metrics": sanitized_metrics,  # 指标平均值字典
+                "detailed_results": sanitized_detailed_results,  # 每个样本的详细结果
                 "sample_count": sample_count,
                 "eval_type": request.eval_type,
                 "model_info": request.model_info.model_dump()
-            }
+            },
+            sample_info=sample_info
         )
         
         logger.info(f"评测任务 {task_id} 完成")
@@ -885,34 +1549,251 @@ def run_evaluation_task(task_id: str, request: EvaluateRequest):
 
 @app.get("/evaluate/status/{task_id}", response_model=TaskStatus)
 async def get_evaluation_status(task_id: str):
-    """获取评测任务状态"""
+    """获取评测任务状态
+    
+    Returns task status including:
+    - Basic status information (status, progress, current_stage)
+    - Sample tracking information (sample_info)
+    - Checkpoint progress information (checkpoint_info)
+    
+    Args:
+        task_id: Task identifier
+        
+    Returns:
+        TaskStatus object with complete task information
+        
+    Raises:
+        HTTPException: If task does not exist
+    """
     # 先从内存查找
-    if task_id in tasks_status:
-        return TaskStatus(**tasks_status[task_id])
+    if task_id not in tasks_status:
+        # 再从磁盘加载
+        saved_status = load_task_status(task_id)
+        if saved_status:
+            tasks_status[task_id] = saved_status
+        else:
+            raise HTTPException(status_code=404, detail="任务不存在")
     
-    # 再从磁盘加载
-    saved_status = load_task_status(task_id)
-    if saved_status:
-        tasks_status[task_id] = saved_status
-        return TaskStatus(**saved_status)
+    # Get task status
+    task_status = tasks_status[task_id]
     
-    raise HTTPException(status_code=404, detail="任务不存在")
+    # Load checkpoint information
+    checkpoint = checkpoint_manager.load_checkpoint(task_id)
+    checkpoint_info = None
+    
+    if checkpoint:
+        checkpoint_info = CheckpointInfo(
+            has_checkpoint=True,
+            completed_stages=checkpoint.get("completed_stages", []),
+            current_stage=checkpoint.get("current_stage"),
+            last_checkpoint_at=checkpoint.get("last_checkpoint_at")
+        )
+    else:
+        checkpoint_info = CheckpointInfo(
+            has_checkpoint=False,
+            completed_stages=[],
+            current_stage=None,
+            last_checkpoint_at=None
+        )
+    
+    # Add checkpoint_info to task status
+    task_status_with_checkpoint = {
+        **task_status,
+        "checkpoint_info": checkpoint_info.model_dump()
+    }
+    
+    return TaskStatus(**task_status_with_checkpoint)
 
 
 @app.get("/evaluate/tasks")
-async def list_evaluation_tasks():
-    """列出所有评测任务"""
-    # 加载所有已保存的任务
-    for task_file in TASKS_DIR.glob("*.json"):
-        task_id = task_file.stem
-        if task_id not in tasks_status:
-            with open(task_file, 'r') as f:
-                tasks_status[task_id] = json.load(f)
+async def list_evaluation_tasks(status: Optional[str] = None):
+    """列出所有评测任务
     
-    return {
-        "tasks": list(tasks_status.values()),
-        "count": len(tasks_status)
+    支持按状态过滤任务列表
+    
+    Args:
+        status: 可选的状态过滤器 (pending, running, completed, failed)
+        
+    Returns:
+        包含任务列表和计数的字典：
+        - tasks: 任务状态列表（包含sample_info）
+        - count: 任务总数
+        - filter: 应用的过滤器（如果有）
+        
+    Raises:
+        HTTPException: 如果提供了无效的状态过滤器
+    """
+    # Validate status filter if provided
+    valid_statuses = ["pending", "running", "completed", "failed"]
+    if status and status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid status filter",
+                "details": f"Status '{status}' is not valid. Must be one of: {valid_statuses}",
+                "action": f"Please use a valid status: {', '.join(valid_statuses)}"
+            }
+        )
+    
+    # Load all saved tasks from directory structure
+    for task_dir in TASKS_DIR.iterdir():
+        if task_dir.is_dir():
+            task_id = task_dir.name
+            if task_id not in tasks_status:
+                status_file = task_dir / "status.json"
+                if status_file.exists():
+                    try:
+                        with open(status_file, 'r') as f:
+                            tasks_status[task_id] = json.load(f)
+                    except Exception as e:
+                        logger.error(f"加载任务状态失败 {task_id}: {e}")
+                        continue
+    
+    # Get all tasks
+    all_tasks = list(tasks_status.values())
+    
+    # Apply status filter if provided
+    if status:
+        filtered_tasks = [task for task in all_tasks if task.get("status") == status]
+    else:
+        filtered_tasks = all_tasks
+    
+    # Sanitize tasks to ensure JSON compliance
+    sanitized_tasks = sanitize_float_values(filtered_tasks)
+    
+    response = {
+        "tasks": sanitized_tasks,
+        "count": len(sanitized_tasks)
     }
+    
+    # Include filter info if applied
+    if status:
+        response["filter"] = status
+        response["total_count"] = len(all_tasks)
+    
+    return response
+
+
+@app.get("/evaluate/{task_id}/samples")
+async def get_task_samples(task_id: str):
+    """获取评测任务的样本详情
+    
+    返回任务的样本选择策略、样本ID列表和每个样本的详细结果
+    
+    Args:
+        task_id: 任务ID
+        
+    Returns:
+        包含样本信息和详细结果的字典：
+        - sample_info: 样本选择信息（策略、总数、选中数等）
+        - detailed_results: 每个样本的详细评测结果
+        - task_status: 任务状态（pending, running, completed, failed）
+        
+    Raises:
+        HTTPException: 如果任务不存在
+    """
+    # First check memory
+    if task_id not in tasks_status:
+        # Try loading from disk
+        saved_status = load_task_status(task_id)
+        if saved_status:
+            tasks_status[task_id] = saved_status
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "Evaluation task not found",
+                    "details": f"Task ID '{task_id}' does not exist",
+                    "action": "Use GET /evaluate/tasks to list available tasks"
+                }
+            )
+    
+    task_status = tasks_status[task_id]
+    
+    # Extract sample_info
+    sample_info = task_status.get("sample_info")
+    
+    # Extract detailed results if task is completed
+    detailed_results = []
+    if task_status.get("status") == "completed" and task_status.get("result"):
+        detailed_results = task_status["result"].get("detailed_results", [])
+    
+    # Build response
+    response = {
+        "task_id": task_id,
+        "task_status": task_status.get("status"),
+        "sample_info": sample_info,
+        "detailed_results": detailed_results,
+        "result_count": len(detailed_results)
+    }
+    
+    return response
+
+
+@app.delete("/evaluate/delete/{task_id}")
+async def delete_evaluation_task(task_id: str):
+    """删除评测任务记录
+    
+    删除任务的所有相关文件和数据，包括：
+    - 任务目录及其所有文件（status.json, config.json, checkpoints等）
+    - 内存中的任务状态
+    
+    注意：此操作不会停止正在运行的任务进程，仅删除记录
+    
+    Args:
+        task_id: 任务ID
+        
+    Returns:
+        成功确认消息
+        
+    Raises:
+        HTTPException: 如果任务不存在
+    """
+    import shutil
+    
+    # Check if task exists in memory or on disk
+    task_dir = TASKS_DIR / task_id
+    task_exists_in_memory = task_id in tasks_status
+    task_exists_on_disk = task_dir.exists()
+    
+    if not task_exists_in_memory and not task_exists_on_disk:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "Evaluation task not found",
+                "details": f"Task ID '{task_id}' does not exist",
+                "action": "Use GET /evaluate/tasks to list available tasks"
+            }
+        )
+    
+    try:
+        # Remove from in-memory tasks_status dict
+        if task_exists_in_memory:
+            del tasks_status[task_id]
+            logger.info(f"任务 '{task_id}' 已从内存中删除")
+        
+        # Remove task directory and all files
+        if task_exists_on_disk:
+            shutil.rmtree(task_dir)
+            logger.info(f"任务目录 '{task_dir}' 已删除")
+        
+        return {
+            "message": f"Evaluation task '{task_id}' deleted successfully",
+            "task_id": task_id,
+            "deleted_from_memory": task_exists_in_memory,
+            "deleted_from_disk": task_exists_on_disk
+        }
+        
+    except Exception as e:
+        logger.error(f"删除任务 '{task_id}' 失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Failed to delete evaluation task",
+                "details": str(e),
+                "task_id": task_id
+            }
+        )
 
 
 if __name__ == "__main__":
