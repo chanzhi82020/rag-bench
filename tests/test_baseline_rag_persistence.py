@@ -1,13 +1,12 @@
 """Tests for BaselineRAG persistence methods"""
-
+import os
 import tempfile
 from pathlib import Path
 
-import numpy as np
 import pytest
 
-from src.rag_benchmark.prepare.baseline_rag import BaselineRAG
-from src.rag_benchmark.prepare.rag_interface import RAGConfig
+from rag_benchmark.prepare.baseline_rag import BaselineRAG
+from rag_benchmark.prepare.rag_interface import RAGConfig
 
 
 @pytest.fixture
@@ -62,6 +61,10 @@ def test_load_from_disk_nonexistent_path(sample_rag_instance, temp_indices_dir):
     not pytest.importorskip("faiss", reason="FAISS not installed"),
     reason="FAISS not installed"
 )
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set"
+)
 def test_has_index_after_indexing(sample_documents):
     """Test has_index returns True after indexing documents"""
     try:
@@ -83,6 +86,10 @@ def test_has_index_after_indexing(sample_documents):
 @pytest.mark.skipif(
     not pytest.importorskip("faiss", reason="FAISS not installed"),
     reason="FAISS not installed"
+)
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set"
 )
 def test_get_index_stats_after_indexing(sample_documents):
     """Test get_index_stats returns correct stats after indexing"""
@@ -111,6 +118,10 @@ def test_get_index_stats_after_indexing(sample_documents):
 @pytest.mark.skipif(
     not pytest.importorskip("faiss", reason="FAISS not installed"),
     reason="FAISS not installed"
+)
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set"
 )
 def test_save_to_disk(sample_documents, temp_indices_dir):
     """Test save_to_disk creates all required files"""
@@ -141,6 +152,10 @@ def test_save_to_disk(sample_documents, temp_indices_dir):
 @pytest.mark.skipif(
     not pytest.importorskip("faiss", reason="FAISS not installed"),
     reason="FAISS not installed"
+)
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set"
 )
 def test_load_from_disk(sample_documents, temp_indices_dir):
     """Test load_from_disk restores index data"""
@@ -183,6 +198,10 @@ def test_load_from_disk(sample_documents, temp_indices_dir):
 @pytest.mark.skipif(
     not pytest.importorskip("faiss", reason="FAISS not installed"),
     reason="FAISS not installed"
+)
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set"
 )
 def test_save_load_round_trip(sample_documents, temp_indices_dir):
     """Test that save and load preserve index functionality"""

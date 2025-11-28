@@ -230,7 +230,7 @@ export default function RAGPanel() {
       const result = await previewCorpus({
         name: indexData.dataset_name,
         subset: indexData.subset || undefined
-      }, 100)
+      }, 1, 100) // page=1, pageSize=100
       
       setCorpusDocuments(result.data.documents)
       setShowDocumentPreview(true)

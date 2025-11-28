@@ -69,6 +69,29 @@ export interface QueryRequest {
   top_k?: number
 }
 
+export interface SampleSelection {
+  strategy: 'specific_ids' | 'random' | 'all'
+  sample_ids?: string[]
+  sample_size?: number
+  random_seed?: number
+}
+
+export interface SampleInfo {
+  selection_strategy: string
+  total_samples: number
+  selected_samples: number
+  sample_ids?: string[]
+  completed_samples: number
+  failed_samples: number
+}
+
+export interface CheckpointInfo {
+  has_checkpoint: boolean
+  completed_stages: string[]
+  current_stage?: string
+  last_checkpoint_at?: string
+}
+
 export interface EvaluateRequest {
   dataset_name: string
   subset?: string
@@ -76,6 +99,7 @@ export interface EvaluateRequest {
   eval_type?: 'e2e' | 'retrieval' | 'generation'
   sample_size?: number
   model_info: ModelInfoConfig
+  sample_selection?: SampleSelection
 }
 
 export interface IndexStatus {
@@ -96,6 +120,8 @@ export interface TaskStatus {
   error?: string
   created_at: string
   updated_at: string
+  sample_info?: SampleInfo
+  checkpoint_info?: CheckpointInfo
 }
 
 // Model Registry APIs
@@ -120,11 +146,25 @@ export const listDatasets = () => client.get<string[]>('/datasets')
 export const getDatasetStats = (data: DatasetInfo) =>
   client.post<DatasetStats>('/datasets/stats', data)
 
-export const sampleDataset = (data: DatasetInfo, n: number = 5) =>
-  client.post('/datasets/sample', data, { params: { n } })
+export const sampleDataset = (
+  data: DatasetInfo, 
+  pageSize: number = 20, 
+  page: number = 1, 
+  search?: string
+) =>
+  client.post('/datasets/sample', data, { 
+    params: { 
+      page_size: pageSize, 
+      page,
+      ...(search && { search })
+    } 
+  })
 
-export const previewCorpus = (data: DatasetInfo, limit: number = 100) =>
-  client.post('/datasets/corpus/preview', data, { params: { limit } })
+export const previewCorpus = (data: DatasetInfo, page: number = 1, pageSize: number = 20) =>
+  client.post('/datasets/corpus/preview', data, { params: { page, page_size: pageSize } })
+
+export const getCorpusByIds = (data: DatasetInfo, documentIds: string[]) =>
+  client.post('/datasets/corpus/by-id', { dataset_info: data, document_ids: documentIds })
 
 // RAG APIs
 export const createRAG = (data: CreateRAGRequest) =>
@@ -153,5 +193,8 @@ export const getEvaluationStatus = (task_id: string) =>
 
 export const listEvaluationTasks = () =>
   client.get('/evaluate/tasks')
+
+export const deleteEvaluationTask = (task_id: string) =>
+  client.delete(`/evaluate/delete/${task_id}`)
 
 export default client

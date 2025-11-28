@@ -1,4 +1,5 @@
 """测试Baseline RAG"""
+import os
 
 import pytest
 
@@ -25,6 +26,10 @@ def test_baseline_rag_with_config():
 @pytest.mark.skipif(
     not pytest.importorskip("faiss", reason="FAISS not installed"),
     reason="FAISS not installed"
+)
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set"
 )
 def test_baseline_rag_index_documents():
     """测试文档索引功能"""
@@ -59,7 +64,12 @@ def test_baseline_rag_index_documents():
     not pytest.importorskip("faiss", reason="FAISS not installed"),
     reason="FAISS not installed"
 )
-def test_baseline_rag_retrieve():
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set"
+)
+@pytest.mark.asyncio
+async def test_baseline_rag_retrieve():
     """测试检索功能"""
     try:
         from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -79,7 +89,7 @@ def test_baseline_rag_retrieve():
         rag.index_documents(documents)
         
         # 检索
-        result = rag.retrieve("什么是Python", top_k=2)
+        result = await rag.retrieve("什么是Python", top_k=2)
         
         # 验证结果
         assert len(result.contexts) == 2
@@ -91,12 +101,13 @@ def test_baseline_rag_retrieve():
         pytest.skip("langchain-openai not installed")
 
 
-def test_baseline_rag_retrieve_without_index():
+@pytest.mark.asyncio
+async def test_baseline_rag_retrieve_without_index():
     """测试未索引时的检索"""
     rag = BaselineRAG()
     
     # 未索引时应返回空结果
-    result = rag.retrieve("test query")
+    result = await rag.retrieve("test query")
     assert result.contexts == []
 
 
@@ -104,7 +115,12 @@ def test_baseline_rag_retrieve_without_index():
     not pytest.importorskip("faiss", reason="FAISS not installed"),
     reason="FAISS not installed"
 )
-def test_baseline_rag_generate():
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set"
+)
+@pytest.mark.asyncio
+async def test_baseline_rag_generate():
     """测试生成功能"""
     try:
         from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -119,7 +135,7 @@ def test_baseline_rag_generate():
         query = "什么是Python？"
         contexts = ["Python是一种高级编程语言", "Python广泛用于数据科学"]
         
-        result = rag.generate(query, contexts)
+        result = await rag.generate(query, contexts)
         
         # 验证答案
         assert isinstance(result.response, str)
@@ -128,12 +144,12 @@ def test_baseline_rag_generate():
     except ImportError:
         pytest.skip("langchain-openai not installed")
 
-
-def test_baseline_rag_generate_empty_contexts():
+@pytest.mark.asyncio
+async def test_baseline_rag_generate_empty_contexts():
     """测试空上下文时的生成"""
     rag = BaselineRAG()
     
-    result = rag.generate("test query", [])
+    result = await rag.generate("test query", [])
     
     # 应返回默认消息
     assert "没有找到相关信息" in result.response or "不知道" in result.response.lower()
@@ -148,7 +164,12 @@ if __name__ == "__main__":
     not pytest.importorskip("faiss", reason="FAISS not installed"),
     reason="FAISS not installed"
 )
-def test_baseline_rag_batch_retrieve():
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set"
+)
+@pytest.mark.asyncio
+async def test_baseline_rag_batch_retrieve():
     """测试批量检索功能"""
     try:
         from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -169,7 +190,7 @@ def test_baseline_rag_batch_retrieve():
         
         # 批量检索
         queries = ["什么是Python", "什么是机器学习"]
-        results = rag.batch_retrieve(queries, top_k=2)
+        results =await rag.batch_retrieve(queries, top_k=2)
         
         # 验证结果
         assert len(results) == 2
@@ -186,7 +207,12 @@ def test_baseline_rag_batch_retrieve():
     not pytest.importorskip("faiss", reason="FAISS not installed"),
     reason="FAISS not installed"
 )
-def test_baseline_rag_batch_generate():
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set"
+)
+@pytest.mark.asyncio
+async def test_baseline_rag_batch_generate():
     """测试批量生成功能"""
     try:
         from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -204,7 +230,7 @@ def test_baseline_rag_batch_generate():
             ["机器学习是人工智能的一个分支", "机器学习使用算法学习数据"]
         ]
         
-        results = rag.batch_generate(queries, contexts_list)
+        results = await rag.batch_generate(queries, contexts_list)
         
         # 验证结果
         assert len(results) == 2
@@ -215,21 +241,26 @@ def test_baseline_rag_batch_generate():
     except ImportError:
         pytest.skip("langchain-openai not installed")
 
-
-def test_baseline_rag_batch_retrieve_without_index():
+@pytest.mark.asyncio
+async def test_baseline_rag_batch_retrieve_without_index():
     """测试未索引时的批量检索"""
     rag = BaselineRAG()
     
     # 未索引时应返回空结果列表
     queries = ["query1", "query2"]
-    results = rag.batch_retrieve(queries)
+    results = await rag.batch_retrieve(queries)
     
     assert len(results) == 2
     for result in results:
         assert result.contexts == []
 
 
-def test_baseline_rag_batch_generate_empty_contexts():
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set"
+)
+@pytest.mark.asyncio
+async def test_baseline_rag_batch_generate_empty_contexts():
     """测试空上下文时的批量生成"""
     try:
         from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -244,7 +275,7 @@ def test_baseline_rag_batch_generate_empty_contexts():
         queries = ["query1", "query2"]
         contexts_list = [[], []]
         
-        results = rag.batch_generate(queries, contexts_list)
+        results = await rag.batch_generate(queries, contexts_list)
         
         # 验证结果
         assert len(results) == 2

@@ -287,7 +287,7 @@ result = evaluate_e2e(exp_ds)
 ### Pattern 4: Dataset Conversion
 
 ```python
-from rag_benchmark.datasets.converters import HotpotQAConverter
+from scripts.converters import HotpotQAConverter
 
 # Convert public dataset to Golden format
 converter = HotpotQAConverter(
